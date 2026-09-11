@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from ..config import APP_NAME, APP_VERSION, DISCLAIMER, OUTPUT_DIR
 from .tabs.calibration_tab import CalibrationTab
 from .tabs.control_tab import ControlResponseTab
+from .tabs.digital_twin_tab import DigitalTwinTab
 from .tabs.energy_tab import EnergyTab
 from .tabs.radar_tab import RadarTab
 from .tabs.rollout_tab import RolloutTab
@@ -36,12 +37,14 @@ class MainWindow(QMainWindow):
         self.energy_tab = EnergyTab()
         self.radar_tab = RadarTab()
         self.rollout_tab = RolloutTab()
+        self.digital_twin_tab = DigitalTwinTab()
         self.calibration_tab = CalibrationTab()
         self.tabs.addTab(self.vibration_tab, "Vibration")
         self.tabs.addTab(self.control_tab, "Control Response")
         self.tabs.addTab(self.energy_tab, "Energy")
         self.tabs.addTab(self.radar_tab, "Radar / MCDA")
         self.tabs.addTab(self.rollout_tab, "SC-MEPLS Simulation")
+        self.tabs.addTab(self.digital_twin_tab, "3D Digital Twin")
         self.tabs.addTab(self.calibration_tab, "AI Calibration")
         self.setCentralWidget(self.tabs)
         self._build_menu()
