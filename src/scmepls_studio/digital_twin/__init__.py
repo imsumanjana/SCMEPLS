@@ -4,6 +4,7 @@ from .animation import AnimationSnapshot, PlaybackController, component_transfor
 from .binding import SceneBinding, SceneBindingRegistry, build_scene_bindings
 from .mesh import MeshDisplayMode, MeshRecord, MeshRegistry, actor_style, polydata_from_part
 from .physics import DigitalTwinFrame, ModuleState, RigidBodyState, SimulationTimeline
+from .plots import digital_twin_history_figure
 from .results import ComponentResult, ResultField, ResultMetric, ResultRange, component_result, default_metric_for_binding, force_vector_n
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     "AnimationSnapshot", "PlaybackController", "component_transforms", "snapshot",
     "ResultMetric", "ResultRange", "ResultField", "ComponentResult",
     "component_result", "default_metric_for_binding", "force_vector_n",
+    "digital_twin_history_figure",
 ]
