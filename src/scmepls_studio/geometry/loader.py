@@ -87,6 +87,55 @@ def _face_rgb(mesh: trimesh.Trimesh) -> np.ndarray | None:
     return None
 
 
+def _validate_topology(component_id: str, vertices: np.ndarray, faces: np.ndarray, mesh: trimesh.Trimesh) -> list[str]:
+    warnings: list[str] = []
+    if np.any(faces < 0) or np.any(faces >= len(vertices)):
+        raise GeometryImportError(f"Component '{component_id}' contains out-of-range face indices.")
+
+    repeated_vertex_faces = np.any(
+        np.column_stack((faces[:, 0] == faces[:, 1], faces[:, 1] == faces[:, 2], faces[:, 0] == faces[:, 2])),
+        axis=1,
+    )
+    repeated_count = int(np.count_nonzero(repeated_vertex_faces))
+    if repeated_count:
+        warnings.append(f"{component_id}: {repeated_count} degenerate triangle(s) contain repeated vertex indices.")
+
+    try:
+        areas = np.asarray(mesh.area_faces, dtype=float)
+        zero_area = int(np.count_nonzero(~np.isfinite(areas) | (areas <= 1e-15)))
+        if zero_area:
+            warnings.append(f"{component_id}: {zero_area} zero/invalid-area triangle(s) detected.")
+    except Exception:
+        warnings.append(f"{component_id}: triangle-area validation could not be completed.")
+
+    sorted_faces = np.sort(faces, axis=1)
+    if len(sorted_faces):
+        duplicate_count = len(sorted_faces) - len(np.unique(sorted_faces, axis=0))
+        if duplicate_count:
+            warnings.append(f"{component_id}: {duplicate_count} duplicate triangle(s) detected.")
+
+    try:
+        if not bool(mesh.is_winding_consistent):
+            warnings.append(f"{component_id}: face winding is not consistent.")
+    except Exception:
+        warnings.append(f"{component_id}: face-winding validation could not be completed.")
+
+    try:
+        if not bool(mesh.is_watertight):
+            warnings.append(f"{component_id}: mesh is not watertight (acceptable for visualization, verify for FEA use).")
+    except Exception:
+        warnings.append(f"{component_id}: watertightness validation could not be completed.")
+
+    try:
+        body_count = int(mesh.body_count)
+        if body_count > 1:
+            warnings.append(f"{component_id}: mesh contains {body_count} disconnected bodies.")
+    except Exception:
+        pass
+
+    return warnings
+
+
 def load_geometry(path: str | Path, source_unit: str = "m", axis_mode: str = "auto") -> GeometryAsset:
     """Load a GLB or STL file and convert geometry coordinates to metres.
 
@@ -119,6 +168,7 @@ def load_geometry(path: str | Path, source_unit: str = "m", axis_mode: str = "au
         axis_transform[:3, :3] = np.array(
             [[1.0, 0.0, 0.0], [0.0, 0.0, -1.0], [0.0, 1.0, 0.0]]
         )
+
     scene = _scene_from_path(source)
     nodes = list(scene.graph.nodes_geometry)
     if not nodes:
@@ -127,6 +177,10 @@ def load_geometry(path: str | Path, source_unit: str = "m", axis_mode: str = "au
     warnings: list[str] = []
     if extension == ".stl":
         warnings.append(f"STL is unitless; coordinates were interpreted as {source_unit}.")
+    elif source_unit != "m":
+        warnings.append(
+            "glTF/GLB convention is metres; a non-metre override was applied. Verify that this file was intentionally exported with nonstandard units."
+        )
 
     parts: list[GeometryPart] = []
     used_ids: dict[str, int] = {}
@@ -139,6 +193,7 @@ def load_geometry(path: str | Path, source_unit: str = "m", axis_mode: str = "au
             continue
         mesh.apply_transform(transform)
         mesh.apply_transform(axis_transform)
+
         vertices = np.asarray(mesh.vertices, dtype=float) * scale
         faces = np.asarray(mesh.faces, dtype=np.int64)
         if vertices.ndim != 2 or vertices.shape[1] != 3 or len(vertices) == 0:
@@ -154,6 +209,10 @@ def load_geometry(path: str | Path, source_unit: str = "m", axis_mode: str = "au
         duplicate_index = used_ids.get(base_id, 0)
         used_ids[base_id] = duplicate_index + 1
         component_id = base_id if duplicate_index == 0 else f"{base_id}_{duplicate_index + 1}"
+        if duplicate_index:
+            warnings.append(f"Duplicate component ID '{base_id}' was renamed to '{component_id}'.")
+
+        warnings.extend(_validate_topology(component_id, vertices, faces, mesh))
         parts.append(
             GeometryPart(
                 component_id=component_id,
@@ -168,8 +227,8 @@ def load_geometry(path: str | Path, source_unit: str = "m", axis_mode: str = "au
 
     asset = GeometryAsset(source, source_unit, effective_axis_mode, scale, tuple(parts), tuple(warnings))
     dims = asset.dimensions_m
-    if np.any(dims <= 0):
-        raise GeometryImportError("Imported geometry has a zero or negative bounding-box dimension.")
+    if np.any(~np.isfinite(dims)) or np.any(dims <= 0):
+        raise GeometryImportError("Imported geometry has an invalid bounding-box dimension.")
     if float(np.max(dims)) > 1000.0:
         warnings.append("Geometry exceeds 1000 m in at least one dimension; verify selected units/scale.")
     if float(np.max(dims)) < 1e-4:
