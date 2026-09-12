@@ -32,7 +32,9 @@ def calculate_energy_metrics(values: EnergyInput) -> EnergyMetrics:
     if any(v < 0 or not np.isfinite(v) for v in components):
         raise ValueError("Energy components must be finite and non-negative.")
     gross = values.traction_kwh + values.levitation_kwh + values.auxiliaries_kwh
-    net = max(0.0, gross - values.recovered_kwh)
+    if values.recovered_kwh > gross + 1e-12:
+        raise ValueError("Recovered energy cannot exceed gross supplied energy in the current energy-balance model.")
+    net = gross - values.recovered_kwh
     tonne_km = values.mass_tonnes * values.distance_m / 1000.0
     sec = net / tonne_km
     recovery = values.recovered_kwh / gross if gross > 0 else 0.0
