@@ -12,6 +12,15 @@ MAX_TIME_STEP_S = 0.02
 CURRENT_TIME_CONSTANT_S = 0.035
 PRESSURE_TIME_CONSTANT_S = 0.18
 VIBRATION_RMS_TIME_CONSTANT_S = 1.0
+MODE_NAMES = {
+    0: "INITIAL",
+    1: "LEVITATE",
+    2: "ROLLOUT",
+    3: "ALIGN",
+    4: "PRELOCK",
+    5: "TRANSFER_SEAT",
+    6: "HARD_LOCK",
+}
 
 
 @dataclass(frozen=True)
@@ -154,7 +163,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
     mass = params.platform_mass_kg + params.payload_mass_kg
     gravity = 9.81
     weight = mass * gravity
-    rows: list[dict[str, float]] = []
+    rows: list[dict[str, float | str]] = []
 
     true_gaps = np.full(8, params.initial_gap_m)
     measured_pneumatic = np.zeros(8)
@@ -308,14 +317,17 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         state.vib2 += vibration_alpha * ((az**2 + ax**2) - state.vib2)
         total_support = fz + fz_lock
 
-        row = {
+        row: dict[str, float | str] = {
             "time_s": t,
             "mode": sc["mode"],
+            "mode_name": MODE_NAMES[int(sc["mode"])],
             "x_m": state.x,
             "x_ref_m": sc["x_ref"],
             "vx_mps": state.vx,
             "y_m": state.y,
+            "vy_mps": state.vy,
             "z_m": state.z,
+            "vz_mps": state.vz,
             "gap_ref_m": effective_gap_ref,
             "mean_gap_m": float(np.mean(true_gaps)),
             "min_gap_m": float(np.min(true_gaps)),
@@ -323,7 +335,11 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
             "roll_rad": state.roll,
             "pitch_rad": state.pitch,
             "yaw_rad": state.yaw,
+            "roll_rate_rad_s": state.p,
+            "pitch_rate_rad_s": state.q,
+            "yaw_rate_rad_s": state.r,
             "ax_mps2": ax,
+            "ay_mps2": ay,
             "az_mps2": az,
             "vibration_rms_proxy": float(np.sqrt(max(state.vib2, 0.0))),
             "em_force_n": float(np.sum(em_force)),
@@ -334,10 +350,20 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
             "fault_severity": severity,
             "unsafe_flag": physical_unsafe,
             "wind_force_n": sc["wind_y"],
+            "cg_shift_x_m": sc["cgx"],
+            "cg_shift_y_m": sc["cgy"],
         }
         for i in range(8):
-            row[f"gap_{i+1}_m"] = true_gaps[i]
-            row[f"health_{i+1}"] = health[i]
+            n = i + 1
+            row[f"gap_{n}_m"] = true_gaps[i]
+            row[f"sensor_gap_{n}_m"] = measured_gaps[i]
+            row[f"estimated_gap_{n}_m"] = estimated_gaps[i]
+            row[f"health_{n}"] = health[i]
+            row[f"coil_efficiency_{n}"] = actual_coil_efficiency[i]
+            row[f"coil_current_{n}_a"] = state.i_actual[i]
+            row[f"em_force_{n}_n"] = em_force[i]
+            row[f"pressure_{n}_pa"] = pressure_measured[i]
+            row[f"pneumatic_force_{n}_n"] = pneumatic_force[i]
         rows.append(row)
 
     df = pd.DataFrame(rows)
