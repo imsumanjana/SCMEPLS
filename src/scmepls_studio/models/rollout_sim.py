@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
@@ -30,6 +30,15 @@ class RolloutParameters:
     track_length_m: float = 1.50
     platform_mass_kg: float = 25.0
     payload_mass_kg: float = 50.0
+    body_length_m: float = 1.10
+    body_width_m: float = 0.50
+    body_height_m: float = 0.36
+    inertia_xx_kg_m2: float = 16.0
+    inertia_yy_kg_m2: float = 22.0
+    inertia_zz_kg_m2: float = 28.0
+    inertia_xy_kg_m2: float = 0.0
+    inertia_xz_kg_m2: float = 0.0
+    inertia_yz_kg_m2: float = 0.0
     initial_gap_m: float = 0.002
     target_gap_m: float = 0.010
     cg_shift_x_m: float = 0.035
@@ -44,6 +53,17 @@ class RolloutParameters:
     sensor_fault_index: int = 5
     leak_time_s: float = 56.0
     leak_index: int = 6
+
+    @property
+    def inertia_tensor_kg_m2(self) -> np.ndarray:
+        return np.array(
+            [
+                [self.inertia_xx_kg_m2, self.inertia_xy_kg_m2, self.inertia_xz_kg_m2],
+                [self.inertia_xy_kg_m2, self.inertia_yy_kg_m2, self.inertia_yz_kg_m2],
+                [self.inertia_xz_kg_m2, self.inertia_yz_kg_m2, self.inertia_zz_kg_m2],
+            ],
+            dtype=float,
+        )
 
 
 @dataclass
@@ -74,8 +94,7 @@ class _State:
 def _smoothstep(a: float) -> tuple[float, float]:
     aa = float(np.clip(a, 0.0, 1.0))
     s = 3 * aa**2 - 2 * aa**3
-    ds_da = 6 * aa * (1 - aa)
-    return s, ds_da
+    return s, 6 * aa * (1 - aa)
 
 
 def _validate_parameters(params: RolloutParameters) -> None:
@@ -89,6 +108,12 @@ def _validate_parameters(params: RolloutParameters) -> None:
         raise ValueError("Track length must be finite and positive.")
     if params.platform_mass_kg <= 0 or params.payload_mass_kg < 0:
         raise ValueError("Mass values are invalid.")
+    dimensions = np.array([params.body_length_m, params.body_width_m, params.body_height_m], dtype=float)
+    if np.any(~np.isfinite(dimensions)) or np.any(dimensions <= 0):
+        raise ValueError("Body dimensions must be finite and positive.")
+    inertia = params.inertia_tensor_kg_m2
+    if np.any(~np.isfinite(inertia)) or np.any(np.linalg.eigvalsh(inertia) <= 0):
+        raise ValueError("Rigid-body inertia tensor must be finite and positive definite.")
     if not (MIN_GAP_M <= params.initial_gap_m <= MAX_GAP_M):
         raise ValueError(f"Initial/seated gap must be between {MIN_GAP_M:g} m and {MAX_GAP_M:g} m.")
     if not (MIN_GAP_M <= params.target_gap_m <= MAX_GAP_M):
@@ -122,8 +147,7 @@ def _scenario(t: float, p: RolloutParameters) -> dict[str, float]:
         s, _ = _smoothstep((t - 1) / 7)
         mode, gap, x_ref, v_ref, lock = 1, p.initial_gap_m + (p.target_gap_m - p.initial_gap_m) * s, 0.0, 0.0, 0.0
     elif t < 38:
-        a = (t - 8) / 30
-        s, ds_da = _smoothstep(a)
+        s, ds_da = _smoothstep((t - 8) / 30)
         mode, gap, x_ref, v_ref, lock = 2, p.target_gap_m, p.track_length_m * s, p.track_length_m * ds_da / 30, 0.0
     elif t < 48:
         mode, gap, x_ref, v_ref, lock = 3, p.target_gap_m, p.track_length_m, 0.0, 0.0
@@ -163,6 +187,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
     mass = params.platform_mass_kg + params.payload_mass_kg
     gravity = 9.81
     weight = mass * gravity
+    inertia = params.inertia_tensor_kg_m2
     rows: list[dict[str, float | str]] = []
 
     true_gaps = np.full(8, params.initial_gap_m)
@@ -173,7 +198,6 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
 
     for t in t_values:
         sc = _scenario(float(t), params)
-
         actual_coil_efficiency = np.ones(8)
         if sc["fault_index"]:
             actual_coil_efficiency[int(sc["fault_index"]) - 1] = 0.35
@@ -197,7 +221,6 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
             and abs(state.yaw) <= 0.05
         )
         effective_gap_ref = sc["gap_ref"] if (sc["mode"] < 5 or docking_ready) else params.target_gap_m
-
         physical_unsafe = int(
             np.max(np.abs(true_gaps - effective_gap_ref)) > 0.003
             or np.min(true_gaps) < MIN_GAP_M
@@ -226,7 +249,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         den_x = np.sum(px**2 * allocator_health) + 1e-9
         force_ref = base_share + allocator_health * (mx_des * py / den_y + my_des * px / den_x)
         mean_gap = float(np.mean(estimated_gaps))
-        force_ref += 10000.0 * (effective_gap_ref - estimated_gaps) + 0.25 * 10000.0 * (mean_gap - estimated_gaps)
+        force_ref += 10000.0 * (effective_gap_ref - estimated_gaps) + 2500.0 * (mean_gap - estimated_gaps)
         force_ref = np.clip(force_ref, 0.0, 320.0)
 
         kmag = 3e-4
@@ -238,8 +261,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
 
         area_p = 1.5e-4
         target_pneumatic_total = max(0.0, lock_fraction * total_force_cmd)
-        target_per_module = np.full(8, target_pneumatic_total / 8)
-        p_cmd = np.minimum(8e5, target_per_module / area_p)
+        p_cmd = np.minimum(8e5, np.full(8, target_pneumatic_total / 8) / area_p)
 
         fx = 520.0 * (sc["x_ref"] - state.x) + 165.0 * (sc["v_ref"] - state.vx)
         fy = -240.0 * state.y - 75.0 * state.vy - sc["wind_y"]
@@ -247,9 +269,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         if sc["mode"] < 2:
             fx = 0.0
         if sc["mode"] >= 6:
-            fx = 0.0
-            fy = 0.0
-            mz_cmd = 0.0
+            fx = fy = mz_cmd = 0.0
         fx = float(np.clip(fx, -140.0, 140.0))
         fy = float(np.clip(fy, -80.0, 80.0))
         mz_cmd = float(np.clip(mz_cmd, -45.0, 45.0))
@@ -264,10 +284,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         pressure_measured = np.zeros(8)
         for i in range(8):
             physical_gap = max(float(true_gaps[i]), 0.0008)
-            em_force[i] = min(
-                320.0,
-                actual_coil_efficiency[i] * kmag * state.i_actual[i] ** 2 / physical_gap**2,
-            )
+            em_force[i] = min(320.0, actual_coil_efficiency[i] * kmag * state.i_actual[i] ** 2 / physical_gap**2)
             leak = 0.60 if sc["leak_index"] == i + 1 else 1.0
             pressure_measured[i] = leak * state.p_actual[i]
             pneumatic_force[i] = max(0.0, pressure_measured[i] * area_p)
@@ -277,7 +294,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         my_support = float(np.sum((em_force + pneumatic_force) * px))
         mx_gravity = weight * sc["cgy"]
         my_gravity = weight * sc["cgx"]
-        mx_wind = 0.18 * sc["wind_y"]
+        mx_wind = 0.5 * params.body_height_m * sc["wind_y"]
 
         fx_lock = lock_fraction * (4000.0 * (params.track_length_m - state.x) - 600.0 * state.vx)
         fy_lock = lock_fraction * (-3500.0 * state.y - 500.0 * state.vy)
@@ -289,9 +306,17 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         ax = (fx + fx_lock - 16.0 * state.vx) / mass
         ay = (fy + fy_lock + sc["wind_y"] - 24.0 * state.vy) / mass
         az = (fz + fz_lock - weight - 90.0 * state.vz) / mass
-        pdot = (mx_support + mx_gravity + mx_wind + mx_lock - 7.0 * state.p) / 16.0
-        qdot = (my_support + my_gravity + my_lock - 8.0 * state.q) / 22.0
-        rdot = (mz_cmd + mz_lock - 5.0 * state.r) / 28.0
+        omega = np.array([state.p, state.q, state.r], dtype=float)
+        moment = np.array(
+            [
+                mx_support + mx_gravity + mx_wind + mx_lock - 7.0 * state.p,
+                my_support + my_gravity + my_lock - 8.0 * state.q,
+                mz_cmd + mz_lock - 5.0 * state.r,
+            ],
+            dtype=float,
+        )
+        omega_dot = np.linalg.solve(inertia, moment - np.cross(omega, inertia @ omega))
+        pdot, qdot, rdot = [float(value) for value in omega_dot]
 
         state.vx += params.dt_s * ax
         state.x += params.dt_s * state.vx
