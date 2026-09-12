@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 
 from ...models.rollout_sim import (
     MAX_GAP_M,
+    MAX_TIME_STEP_S,
     MIN_COMPLETE_RUN_TIME_S,
     MIN_GAP_M,
     RolloutParameters,
@@ -40,7 +41,7 @@ class RolloutTab(QWidget):
             "and pneumatic leakage. It is a reduced-order engineering model for feasibility assessment; safety-critical use requires validated parameters and independent review."
         ); note.setWordWrap(True); self.controls.add_widget(note)
         self.controls.add_widget(form_row("Provenance", self.provenance))
-        self.dt = make_double(0.01, 0.001, 0.1, 4, 0.005)
+        self.dt = make_double(0.01, 0.001, MAX_TIME_STEP_S, 4, 0.001)
         self.end_time = make_double(80.0, MIN_COMPLETE_RUN_TIME_S, 500.0, 2, 5.0)
         self.track_length = make_double(1.50, 0.1, 100.0, 3, 0.1)
         self.platform_mass = make_double(25.0, 0.1, 1e6, 3, 1.0)
