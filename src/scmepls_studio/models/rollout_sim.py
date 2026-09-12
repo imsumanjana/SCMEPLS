@@ -81,9 +81,11 @@ def _validate_parameters(params: RolloutParameters) -> None:
     if params.platform_mass_kg <= 0 or params.payload_mass_kg < 0:
         raise ValueError("Mass values are invalid.")
     if not (MIN_GAP_M <= params.initial_gap_m <= MAX_GAP_M):
-        raise ValueError(f"Initial gap must be between {MIN_GAP_M:g} m and {MAX_GAP_M:g} m.")
+        raise ValueError(f"Initial/seated gap must be between {MIN_GAP_M:g} m and {MAX_GAP_M:g} m.")
     if not (MIN_GAP_M <= params.target_gap_m <= MAX_GAP_M):
-        raise ValueError(f"Target gap must be between {MIN_GAP_M:g} m and {MAX_GAP_M:g} m.")
+        raise ValueError(f"Levitation gap must be between {MIN_GAP_M:g} m and {MAX_GAP_M:g} m.")
+    if params.initial_gap_m >= params.target_gap_m:
+        raise ValueError("Initial/seated gap must be smaller than the levitation target gap.")
     for name, value in (
         ("coil_fault_index", params.coil_fault_index),
         ("sensor_fault_index", params.sensor_fault_index),
@@ -119,11 +121,15 @@ def _scenario(t: float, p: RolloutParameters) -> dict[str, float]:
     elif t < 56:
         s, _ = _smoothstep((t - 48) / 8)
         mode, gap, x_ref, v_ref, lock = 4, p.target_gap_m, p.track_length_m, 0.0, 0.10 * s
+    elif t < 68:
+        s, _ = _smoothstep((t - 56) / 12)
+        gap = p.target_gap_m + (p.initial_gap_m - p.target_gap_m) * s
+        mode, x_ref, v_ref, lock = 5, p.track_length_m, 0.0, 0.10 + 0.75 * s
     elif t < 72:
-        s, _ = _smoothstep((t - 56) / 16)
-        mode, gap, x_ref, v_ref, lock = 5, p.target_gap_m, p.track_length_m, 0.0, 0.10 + 0.90 * s
+        s, _ = _smoothstep((t - 68) / 4)
+        mode, gap, x_ref, v_ref, lock = 5, p.initial_gap_m, p.track_length_m, 0.0, 0.85 + 0.15 * s
     else:
-        mode, gap, x_ref, v_ref, lock = 6, p.target_gap_m, p.track_length_m, 0.0, 1.0
+        mode, gap, x_ref, v_ref, lock = 6, p.initial_gap_m, p.track_length_m, 0.0, 1.0
     return {
         "mode": mode,
         "gap_ref": gap,
@@ -175,8 +181,16 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
             estimated_gaps[idx] = float(np.median(np.delete(measured_gaps, idx)))
             severity = max(severity, 0.25)
 
+        docking_ready = bool(
+            sc["mode"] >= 3
+            and abs(state.x - params.track_length_m) <= 0.05
+            and abs(state.y) <= 0.02
+            and abs(state.yaw) <= 0.05
+        )
+        effective_gap_ref = sc["gap_ref"] if (sc["mode"] < 5 or docking_ready) else params.target_gap_m
+
         physical_unsafe = int(
-            np.max(np.abs(true_gaps - sc["gap_ref"])) > 0.003
+            np.max(np.abs(true_gaps - effective_gap_ref)) > 0.003
             or np.min(true_gaps) < MIN_GAP_M
             or abs(state.roll) > 0.075
             or abs(state.pitch) > 0.075
@@ -184,18 +198,12 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         if physical_unsafe:
             severity = max(severity, 0.85)
 
-        docking_ready = bool(
-            sc["mode"] >= 3
-            and abs(state.x - params.track_length_m) <= 0.05
-            and abs(state.y) <= 0.02
-            and abs(state.yaw) <= 0.05
-        )
         lock_fraction = sc["lock_fraction"] if docking_ready else 0.0
         if physical_unsafe and docking_ready:
             lock_fraction = max(lock_fraction, 0.65)
 
         kz, dz = 14000.0, 600.0
-        total_force_cmd = weight + kz * (sc["gap_ref"] - state.z) - dz * state.vz
+        total_force_cmd = weight + kz * (effective_gap_ref - state.z) - dz * state.vz
         total_force_cmd = float(np.clip(total_force_cmd, 0.70 * weight, 1.12 * weight))
         mx_des = -weight * sc["cgy"] - 5000.0 * state.roll - 450.0 * state.p
         my_des = -weight * sc["cgx"] - 6000.0 * state.pitch - 500.0 * state.q
@@ -209,7 +217,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         den_x = np.sum(px**2 * allocator_health) + 1e-9
         force_ref = base_share + allocator_health * (mx_des * py / den_y + my_des * px / den_x)
         mean_gap = float(np.mean(estimated_gaps))
-        force_ref += 10000.0 * (sc["gap_ref"] - estimated_gaps) + 0.25 * 10000.0 * (mean_gap - estimated_gaps)
+        force_ref += 10000.0 * (effective_gap_ref - estimated_gaps) + 0.25 * 10000.0 * (mean_gap - estimated_gaps)
         force_ref = np.clip(force_ref, 0.0, 320.0)
 
         kmag = 3e-4
@@ -227,8 +235,12 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         fx = 520.0 * (sc["x_ref"] - state.x) + 165.0 * (sc["v_ref"] - state.vx)
         fy = -240.0 * state.y - 75.0 * state.vy - sc["wind_y"]
         mz_cmd = -180.0 * state.yaw - 45.0 * state.r
-        if sc["mode"] < 2 or sc["mode"] >= 6:
+        if sc["mode"] < 2:
             fx = 0.0
+        if sc["mode"] >= 6:
+            fx = 0.0
+            fy = 0.0
+            mz_cmd = 0.0
         fx = float(np.clip(fx, -140.0, 140.0))
         fy = float(np.clip(fy, -80.0, 80.0))
         mz_cmd = float(np.clip(mz_cmd, -45.0, 45.0))
@@ -257,16 +269,20 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         mx_gravity = weight * sc["cgy"]
         my_gravity = weight * sc["cgx"]
         mx_wind = 0.18 * sc["wind_y"]
-        fz_lock = lock_fraction * (9000.0 * (sc["gap_ref"] - state.z) - 700.0 * state.vz)
+
+        fx_lock = lock_fraction * (4000.0 * (params.track_length_m - state.x) - 600.0 * state.vx)
+        fy_lock = lock_fraction * (-3500.0 * state.y - 500.0 * state.vy)
+        fz_lock = lock_fraction * (9000.0 * (effective_gap_ref - state.z) - 700.0 * state.vz)
         mx_lock = -lock_fraction * (2500.0 * state.roll + 450.0 * state.p)
         my_lock = -lock_fraction * (3500.0 * state.pitch + 550.0 * state.q)
+        mz_lock = -lock_fraction * (2200.0 * state.yaw + 300.0 * state.r)
 
-        ax = (fx - 16.0 * state.vx) / mass
-        ay = (fy + sc["wind_y"] - 24.0 * state.vy) / mass
+        ax = (fx + fx_lock - 16.0 * state.vx) / mass
+        ay = (fy + fy_lock + sc["wind_y"] - 24.0 * state.vy) / mass
         az = (fz + fz_lock - weight - 90.0 * state.vz) / mass
         pdot = (mx_support + mx_gravity + mx_wind + mx_lock - 7.0 * state.p) / 16.0
         qdot = (my_support + my_gravity + my_lock - 8.0 * state.q) / 22.0
-        rdot = (mz_cmd - 5.0 * state.r) / 28.0
+        rdot = (mz_cmd + mz_lock - 5.0 * state.r) / 28.0
 
         state.vx += params.dt_s * ax
         state.x += params.dt_s * state.vx
@@ -298,8 +314,9 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
             "x_m": state.x,
             "x_ref_m": sc["x_ref"],
             "vx_mps": state.vx,
+            "y_m": state.y,
             "z_m": state.z,
-            "gap_ref_m": sc["gap_ref"],
+            "gap_ref_m": effective_gap_ref,
             "mean_gap_m": float(np.mean(true_gaps)),
             "min_gap_m": float(np.min(true_gaps)),
             "max_gap_m": float(np.max(true_gaps)),
@@ -337,6 +354,9 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         "maximum_roll_deg": float(np.max(np.abs(df["roll_rad"])) * 180 / np.pi),
         "maximum_pitch_deg": float(np.max(np.abs(df["pitch_rad"])) * 180 / np.pi),
         "final_position_error_mm": float(abs(params.track_length_m - df.iloc[-1]["x_m"]) * 1000),
+        "final_lateral_error_mm": float(abs(df.iloc[-1]["y_m"]) * 1000),
+        "final_yaw_error_deg": float(abs(df.iloc[-1]["yaw_rad"]) * 180 / np.pi),
+        "final_mean_gap_mm": float(df.iloc[-1]["mean_gap_m"] * 1000),
         "support_force_cv_during_transfer_percent": float(
             100 * df.loc[transfer, "total_support_force_n"].std() / max(df.loc[transfer, "total_support_force_n"].mean(), 1e-9)
         ),
