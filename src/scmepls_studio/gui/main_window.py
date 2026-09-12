@@ -6,7 +6,6 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QLabel,
     QMainWindow,
     QMessageBox,
     QStatusBar,
@@ -19,6 +18,7 @@ from .tabs.calibration_tab import CalibrationTab
 from .tabs.control_tab import ControlResponseTab
 from .tabs.digital_twin_tab import DigitalTwinTab
 from .tabs.energy_tab import EnergyTab
+from .tabs.overview_tab import OverviewTab
 from .tabs.radar_tab import RadarTab
 from .tabs.rollout_tab import RolloutTab
 from .tabs.vibration_tab import VibrationTab
@@ -32,6 +32,7 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1100, 720)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        self.overview_tab = OverviewTab()
         self.vibration_tab = VibrationTab()
         self.control_tab = ControlResponseTab()
         self.energy_tab = EnergyTab()
@@ -39,6 +40,7 @@ class MainWindow(QMainWindow):
         self.rollout_tab = RolloutTab()
         self.digital_twin_tab = DigitalTwinTab()
         self.calibration_tab = CalibrationTab()
+        self.tabs.addTab(self.overview_tab, "Overview")
         self.tabs.addTab(self.vibration_tab, "Vibration")
         self.tabs.addTab(self.control_tab, "Control Response")
         self.tabs.addTab(self.energy_tab, "Energy")
@@ -72,15 +74,67 @@ class MainWindow(QMainWindow):
         try:
             from ..io.export import export_figure
             exports = [
-                (self.vibration_tab.plot_panel.figure, out / "Fig_vibration_normalized_RMS.png", {"analysis": "Vibration", "provenance": self.vibration_tab.provenance.currentText()}),
-                (self.control_tab.plot_panel.figure, out / "Fig_closed_loop_step_response.png", {"analysis": "Control response", "provenance": self.control_tab.provenance.currentText()}),
-                (self.energy_tab.plot_panel.figure, out / "Fig_energy_performance.png", {"analysis": "Energy", "provenance": self.energy_tab.provenance.currentText()}),
-                (self.radar_tab.plot_panel.figure, out / "Fig_multicriteria_radar.png", {"analysis": "Radar/MCDA", "provenance": self.radar_tab.provenance.currentText()}),
-                (self.rollout_tab.plot_panel.figure, out / "Fig_SCMEPLS_rollout_dashboard.png", {"analysis": "SC-MEPLS simulation", "provenance": self.rollout_tab.provenance.currentText()}),
+                (
+                    self.vibration_tab.plot_panel.figure,
+                    out / "Fig_vibration_normalized_RMS.png",
+                    {
+                        "analysis": "Vibration",
+                        "provenance": self.vibration_tab.provenance.currentText(),
+                        "metrics": None if self.vibration_tab.metrics is None else self.vibration_tab.metrics.to_dict(orient="records"),
+                    },
+                ),
+                (
+                    self.control_tab.plot_panel.figure,
+                    out / "Fig_closed_loop_step_response.png",
+                    {
+                        "analysis": "Control response",
+                        "provenance": self.control_tab.provenance.currentText(),
+                        "models": {
+                            "Maglev System": self.control_tab.maglev.parameters().__dict__,
+                            "Conventional System": self.control_tab.conventional.parameters().__dict__,
+                        },
+                        "metrics": self.control_tab.metrics_df.to_dict(orient="records"),
+                    },
+                ),
+                (
+                    self.energy_tab.plot_panel.figure,
+                    out / "Fig_energy_performance.png",
+                    {
+                        "analysis": "Energy",
+                        "provenance": self.energy_tab.provenance.currentText(),
+                        "inputs": {
+                            "Crawler": self.energy_tab.crawler.values().__dict__,
+                            "Rail": self.energy_tab.rail.values().__dict__,
+                            "Maglev": self.energy_tab.maglev.values().__dict__,
+                        },
+                        "metrics": self.energy_tab.comparison.to_dict(orient="records"),
+                    },
+                ),
+                (
+                    self.radar_tab.plot_panel.figure,
+                    out / "Fig_multicriteria_radar.png",
+                    {
+                        "analysis": "Radar/MCDA",
+                        "provenance": self.radar_tab.provenance.currentText(),
+                        "weights": {c.name: c.weight for c in self.radar_tab.criteria},
+                        "scores": self.radar_tab.scores.to_dict(orient="records"),
+                        "ranking": self.radar_tab.ranked.to_dict(orient="records"),
+                    },
+                ),
+                (
+                    self.rollout_tab.plot_panel.figure,
+                    out / "Fig_SCMEPLS_rollout_dashboard.png",
+                    {
+                        "analysis": "SC-MEPLS simulation",
+                        "provenance": self.rollout_tab.provenance.currentText(),
+                        "parameters": self.rollout_tab.parameters().__dict__,
+                        "metrics": {k: v for k, v in self.rollout_tab.metrics.items() if k != "parameters"},
+                    },
+                ),
             ]
             for figure, path, metadata in exports:
                 export_figure(figure, path, 600, metadata)
-            if not self.vibration_tab.metrics is None:
+            if self.vibration_tab.metrics is not None:
                 self.vibration_tab.metrics.to_csv(out / "vibration_metrics.csv", index=False)
             if not self.control_tab.metrics_df.empty:
                 self.control_tab.metrics_df.to_csv(out / "control_response_metrics.csv", index=False)
