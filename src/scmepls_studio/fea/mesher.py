@@ -83,12 +83,10 @@ def _gmsh_tetrahedralize(part: GeometryPart, options: MeshingOptions) -> TetraMe
             gmsh.merge(str(stl_path))
 
             angle = np.deg2rad(float(options.classify_angle_deg))
-            gmsh.model.mesh.classifySurfaces(
-                angle,
-                includeBoundary=True,
-                forceParametrizablePatches=True,
-                curveAngle=np.pi,
-            )
+            # Gmsh 4.13-4.15 Python bindings expose these arguments as
+            # (angle, boundary, forReparametrization, curveAngle, exportDiscrete).
+            # Positional arguments keep compatibility across the supported releases.
+            gmsh.model.mesh.classifySurfaces(angle, True, True, np.pi, True)
             gmsh.model.mesh.createGeometry()
             gmsh.model.geo.synchronize()
             surfaces = [tag for dim, tag in gmsh.model.getEntities(2) if dim == 2]
