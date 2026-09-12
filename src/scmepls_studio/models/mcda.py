@@ -24,6 +24,8 @@ def validate_scores(scores: pd.DataFrame, criteria: list[Criterion]) -> None:
     values = scores[names].to_numpy(dtype=float)
     if not np.isfinite(values).all():
         raise ValueError("Scores contain non-finite values.")
+    if any(not np.isfinite(c.weight) or c.weight < 0 for c in criteria):
+        raise ValueError("Criterion weights must be finite and non-negative.")
 
 
 def normalize_mcda(scores: pd.DataFrame, criteria: list[Criterion], scale_min: float = 1.0, scale_max: float = 5.0) -> pd.DataFrame:
@@ -43,7 +45,8 @@ def normalize_mcda(scores: pd.DataFrame, criteria: list[Criterion], scale_min: f
 
 
 def weighted_scores(normalized_scores: pd.DataFrame, criteria: list[Criterion]) -> pd.DataFrame:
-    weights = np.array([max(0.0, c.weight) for c in criteria], dtype=float)
+    validate_scores(normalized_scores, criteria)
+    weights = np.array([c.weight for c in criteria], dtype=float)
     if np.sum(weights) <= 0:
         raise ValueError("At least one criterion weight must be positive.")
     weights /= np.sum(weights)
