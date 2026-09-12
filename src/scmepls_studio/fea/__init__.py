@@ -1,12 +1,21 @@
 """Volumetric meshing and finite-element analysis for imported SC-MEPLS geometry."""
 
-from .mesh import TetraMesh, TetraMeshError
-from .mesher import MeshingOptions, VolumeMeshingError, select_structural_part, tetrahedralize_geometry
+from .coupling import (
+    NodeMapping,
+    StructuralFrameResult,
+    StructuralLoadMap,
+    StructuralTwinSolver,
+    auto_structural_load_map,
+    map_structural_locations,
+    validate_structural_mapping,
+)
 from .mass_properties import (
     StructuralMassProperties,
     rollout_parameters_from_structure,
     structural_mass_properties,
 )
+from .mesh import TetraMesh, TetraMeshError
+from .mesher import MeshingOptions, VolumeMeshingError, select_structural_part, tetrahedralize_geometry
 from .solver import (
     FEAResult,
     IsotropicMaterial,
@@ -16,22 +25,39 @@ from .solver import (
     three_point_kinematic_constraints,
     von_mises_from_stress,
 )
+from .structural_manifest import (
+    StructuralManifest,
+    StructuralManifestError,
+    load_structural_manifest,
+    structural_manifest_path_for_geometry,
+)
 
 __all__ = [
     "FEAResult",
     "IsotropicMaterial",
     "MeshingOptions",
+    "NodeMapping",
     "StaticElasticSolver",
+    "StructuralFrameResult",
+    "StructuralLoadMap",
+    "StructuralManifest",
+    "StructuralManifestError",
     "StructuralMassProperties",
+    "StructuralTwinSolver",
     "TetraMesh",
     "TetraMeshError",
     "VolumeMeshingError",
+    "auto_structural_load_map",
     "constrained_dofs",
     "elasticity_matrix",
+    "load_structural_manifest",
+    "map_structural_locations",
     "rollout_parameters_from_structure",
     "select_structural_part",
+    "structural_manifest_path_for_geometry",
     "structural_mass_properties",
     "three_point_kinematic_constraints",
     "tetrahedralize_geometry",
+    "validate_structural_mapping",
     "von_mises_from_stress",
 ]
