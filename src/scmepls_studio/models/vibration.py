@@ -7,6 +7,8 @@ import numpy as np
 import pandas as pd
 from scipy.signal import welch
 
+MAX_RELATIVE_SAMPLE_JITTER = 0.02
+
 
 @dataclass(frozen=True)
 class VibrationMetrics:
@@ -31,13 +33,22 @@ def calculate_metrics(time_s: np.ndarray, acceleration_mps2: np.ndarray) -> Vibr
     a = np.asarray(acceleration_mps2, dtype=float)
     if t.size != a.size or t.size < 4:
         raise ValueError("Time and acceleration arrays must have equal length and at least four samples.")
+    if not np.isfinite(t).all() or not np.isfinite(a).all():
+        raise ValueError("Time and acceleration arrays must contain only finite values.")
     dt = np.diff(t)
     if np.any(dt <= 0):
         raise ValueError("Time values must be strictly increasing.")
+    median_dt = float(np.median(dt))
+    relative_jitter = float(np.max(np.abs(dt - median_dt)) / max(median_dt, 1e-15))
+    if relative_jitter > MAX_RELATIVE_SAMPLE_JITTER:
+        raise ValueError(
+            "Welch PSD requires approximately uniform sampling. Resample the time history before import "
+            f"(maximum relative sample-interval jitter {relative_jitter:.3%} exceeds {MAX_RELATIVE_SAMPLE_JITTER:.1%})."
+        )
     rms = rms_acceleration(a)
     peak = float(np.max(np.abs(a)))
     crest = float(peak / rms) if rms > 0 else 0.0
-    fs = float(1.0 / np.median(dt))
+    fs = float(1.0 / median_dt)
     frequencies, psd = welch(a - np.mean(a), fs=fs, nperseg=min(1024, a.size))
     dominant = float(frequencies[int(np.argmax(psd))]) if psd.size else 0.0
     return VibrationMetrics(
