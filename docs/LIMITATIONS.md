@@ -1,15 +1,22 @@
 # Limitations and required validation
 
-- Default values are illustrative and must not be described as measured results.
-- Relative vibration and radar scores do not establish full-scale performance.
-- Welch PSD/dominant-frequency analysis assumes approximately uniform sampling; irregular time histories must be resampled before analysis.
-- The control-response models are reduced-order and do not include flexible-body modes, detailed actuator saturation, switching delay, sensor quantization, or full flexible six-degree-of-freedom coupling.
-- Energy results depend entirely on the entered energy budget and do not estimate magnetic, thermal, converter, cryogenic, or infrastructure losses automatically. Recovered energy is constrained to the gross supplied energy in the present accounting model.
-- The SC-MEPLS rollout simulation is a reduced-order rigid-body model. It separates true, measured and estimated air gaps and models distributed electromagnetic/pneumatic support, but it is not a substitute for Simscape/Multibody, electromagnetic FEA, CFD, structural FEA, or test data.
-- The mechanical lock is represented by reduced-order translational/rotational restoring elements rather than detailed pin/socket contact, friction, backlash, impact, or structural compliance.
-- Fault detection/health knowledge remains simplified. The model does not yet represent a complete diagnostic observer, communication latency, or probabilistic fault-detection performance.
-- Imported GLB/STL geometry is visualization-only. Mesh validation warnings do not certify a geometry for FEA, manufacturing, collision/contact analysis, or safety-critical clearance verification.
-- The geometry manifest validates component naming/binding only; dynamic actor binding to the SC-MEPLS time history is a later stage.
-- The AI calibration module is valid only inside the domain represented by its training data. KFold, chronological, or grouped cross-validation is not a replacement for a final external validation dataset.
-- Feature selection remains the user's responsibility; target leakage or physically meaningless inputs can still produce misleading model scores.
-- Export resolution does not increase scientific validity; high DPI only improves publication rendering.
+- Default numerical values are illustrative/research defaults unless their provenance is explicitly documented. They must not be described as measurements.
+- The SC-MEPLS plant is a reduced-order rigid-body engineering model. Flexible-body dynamics, detailed electromagnetic field solutions, contact/friction/backlash, converter switching, communication latency, thermal effects and full diagnostic-observer performance are outside the current reduced-order equations.
+- The lock logic now uses explicit docking/interlock conditions and a latched engagement state, but the mechanical lock itself is still represented by reduced-order restoring/damping terms rather than nonlinear pin/socket or clamp contact.
+- Manual dynamics use configured M1–M8 locations. Only a successful structural-manifest workflow establishes geometry-coupled M1–M8 coordinates and integrated mass/inertia.
+- A surface GLB/STL imported only in the 3D Digital Twin remains a visualization asset. Structural physics are enabled only through the separate validated Structural FEA workflow.
+- The structural solver is homogeneous isotropic, first-order tetrahedral, small-strain and quasi-static. It does not model multi-material joints, weld/bolt details, nonlinear contact, plasticity, buckling, fatigue, fracture, transient flexible-body response or electromagnetic fields.
+- For a heterogeneous complete assembly, one-material FEA may be used only as an explicitly documented equivalent-homogeneous screening calculation. Local interface/joint claims require an appropriate validated external solver/model.
+- Structural load application uses finite boundary-node patches defined around explicit physical locations. Patch size and location are model inputs and require validation against real actuator/contact areas.
+- The 3-2-1 structural constraints are numerical rigid-mode suppressors, not physical maglev restraints. Pre-FEA force/moment balance and small constraint reactions should be checked before interpreting local stress.
+- Local peak stress is mesh dependent. The software can run a coarse/base/fine convergence study; final quantitative stress claims should not be made without acceptable convergence and local mesh inspection.
+- `platform_only` structural coupling requires explicit payload mass, centroid, inertia and support locations. The software no longer substitutes stale total-body inertia when those data are unknown.
+- Geometry-derived mass properties are only as valid as the selected structural body, units, watertightness, density/material assumption and payload definition.
+- The vibration module requires approximately uniform sampling for Welch PSD. Experimental RMS may be strongly affected by gravity projection/DC bias; preprocessing must therefore be chosen explicitly and reported.
+- The control-response tab is a supporting linear comparison. Filtered PID derivative is represented, but saturation/rate limiting and switching nonlinearities are not included there.
+- Energy results depend entirely on the entered energy budget and do not automatically estimate magnetic, thermal, converter, cryogenic or infrastructure losses. The physical SEC should be reported; the optional relative-efficiency ratio is only a comparison aid.
+- Radar/MCDA results remain dependent on the supplied evidence scores and weights. They are not independent physical validation.
+- AI calibration is valid only inside the domain represented by traceable training data. Cross-validation is not a substitute for untouched external validation. Near-perfect feature/target correlations are warnings, not proof of leakage or validity.
+- 3D module coloring and arrows are visualization layers. Physical M1–M8 arrow origins and the CG marker become validated only after a structural validation report has been bound.
+- High export DPI improves rendering, not scientific validity.
+- Safety-critical application requires independent engineering review, qualified hardware/software processes, subsystem testing, environmental qualification and appropriate regulatory/safety assessment.
