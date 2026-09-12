@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from ..coordinates import rotation_matrix_body_to_world
+
 MODULE_COUNT = 8
 _REQUIRED_COLUMNS = ("time_s", "x_m", "y_m", "z_m", "roll_rad", "pitch_rad", "yaw_rad")
 
@@ -123,6 +125,13 @@ class SimulationTimeline:
         return number if np.isfinite(number) else float(default)
 
     @classmethod
+    def _value_aliases(cls, row: pd.Series, names: tuple[str, ...], default: float = 0.0) -> float:
+        for name in names:
+            if name in row.index:
+                return cls._value(row, name, default)
+        return float(default)
+
+    @classmethod
     def _rigid_body_from_row(cls, row: pd.Series) -> RigidBodyState:
         return RigidBodyState(
             x_m=cls._value(row, "x_m"),
@@ -134,9 +143,9 @@ class SimulationTimeline:
             vx_mps=cls._value(row, "vx_mps"),
             vy_mps=cls._value(row, "vy_mps"),
             vz_mps=cls._value(row, "vz_mps"),
-            p_radps=cls._value(row, "p_radps"),
-            q_radps=cls._value(row, "q_radps"),
-            r_radps=cls._value(row, "r_radps"),
+            p_radps=cls._value_aliases(row, ("roll_rate_rad_s", "p_radps")),
+            q_radps=cls._value_aliases(row, ("pitch_rate_rad_s", "q_radps")),
+            r_radps=cls._value_aliases(row, ("yaw_rate_rad_s", "r_radps")),
         )
 
     @classmethod
@@ -160,12 +169,13 @@ class SimulationTimeline:
 
         Imported CAD remains the reference geometry. Translation is the simulated
         displacement from frame zero, while rotation is relative to the initial
-        attitude and is applied about the manifest/platform pivot.
+        attitude and is applied about the manifest/platform pivot. The transform
+        uses the same right-handed ZYX convention as the reduced-order plant.
         """
         current = frame.rigid_body
         reference = self.reference
-        rotation = _rotation_matrix(current.roll_rad, current.pitch_rad, current.yaw_rad)
-        rotation_ref = _rotation_matrix(reference.roll_rad, reference.pitch_rad, reference.yaw_rad)
+        rotation = rotation_matrix_body_to_world(current.roll_rad, current.pitch_rad, current.yaw_rad)
+        rotation_ref = rotation_matrix_body_to_world(reference.roll_rad, reference.pitch_rad, reference.yaw_rad)
         relative_rotation = rotation @ rotation_ref.T
         translation = np.array(
             [current.x_m - reference.x_m, current.y_m - reference.y_m, current.z_m - reference.z_m],
@@ -176,13 +186,3 @@ class SimulationTimeline:
         transform[:3, :3] = relative_rotation
         transform[:3, 3] = translation + pivot - relative_rotation @ pivot
         return transform
-
-
-def _rotation_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
-    cr, sr = np.cos(roll), np.sin(roll)
-    cp, sp = np.cos(pitch), np.sin(pitch)
-    cy, sy = np.cos(yaw), np.sin(yaw)
-    rx = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
-    ry = np.array([[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]])
-    rz = np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]])
-    return rz @ ry @ rx
