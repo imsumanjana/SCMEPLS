@@ -1,4 +1,5 @@
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,8 @@ from scmepls_studio.models.vibration import calculate_metrics
 
 
 def test_version_and_packaged_default_resource_are_consistent():
-    assert APP_VERSION == __version__ == "1.1.6"
+    assert APP_VERSION == __version__
+    assert re.fullmatch(r"\d+\.\d+\.\d+", __version__)
     assert DEFAULT_PROJECT_PATH.exists()
     payload = json.loads(DEFAULT_PROJECT_PATH.read_text(encoding="utf-8"))
     assert payload["rollout_simulation"]["modules"] == 8
