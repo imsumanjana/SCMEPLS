@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .version import __version__
+
 APP_NAME = "SC-MEPLS Analysis Studio"
-APP_VERSION = "1.1.5"
-ROOT_DIR = Path(__file__).resolve().parents[2]
-DATA_DIR = ROOT_DIR / "data"
-OUTPUT_DIR = ROOT_DIR / "outputs"
-DEFAULT_PROJECT_PATH = DATA_DIR / "default_project.json"
+APP_VERSION = __version__
+PACKAGE_DIR = Path(__file__).resolve().parent
+RESOURCE_DIR = PACKAGE_DIR / "resources"
+DATA_DIR = RESOURCE_DIR
+OUTPUT_DIR = Path.cwd() / "outputs"
+DEFAULT_PROJECT_PATH = RESOURCE_DIR / "default_project.json"
 MIN_EXPORT_DPI = 600
 DEFAULT_EXPORT_DPI = 600
 
