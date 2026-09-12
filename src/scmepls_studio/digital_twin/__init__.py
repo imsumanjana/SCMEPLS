@@ -1,5 +1,6 @@
 """Runtime wiring between imported geometry and SC-MEPLS simulation results."""
 
+from .animation import AnimationSnapshot, PlaybackController, component_transforms, snapshot
 from .binding import SceneBinding, SceneBindingRegistry, build_scene_bindings
 from .mesh import MeshDisplayMode, MeshRecord, MeshRegistry, actor_style, polydata_from_part
 from .physics import DigitalTwinFrame, ModuleState, RigidBodyState, SimulationTimeline
@@ -17,4 +18,8 @@ __all__ = [
     "ModuleState",
     "DigitalTwinFrame",
     "SimulationTimeline",
+    "AnimationSnapshot",
+    "PlaybackController",
+    "component_transforms",
+    "snapshot",
 ]
