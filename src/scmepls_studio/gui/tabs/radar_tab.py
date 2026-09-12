@@ -72,7 +72,7 @@ class RadarTab(QWidget):
         splitter.addWidget(right); splitter.setSizes([500, 900])
         layout = QHBoxLayout(self); layout.setContentsMargins(6,6,6,6); layout.addWidget(splitter)
         self.run_btn.clicked.connect(self.run_analysis); self.export_bar.export_requested.connect(self.export_plot)
-        self.scores = pd.DataFrame(); self.ranked = pd.DataFrame(); self.run_analysis()
+        self.scores = pd.DataFrame(); self.ranked = pd.DataFrame(); self.criteria: list[Criterion] = []; self.run_analysis()
 
     def _read_table(self) -> tuple[pd.DataFrame, list[Criterion]]:
         criteria: list[Criterion] = []
@@ -80,6 +80,8 @@ class RadarTab(QWidget):
         for r, criterion_name in enumerate(self.CRITERIA):
             try:
                 weight = float(self.table.item(r, 1).text())
+                if weight < 0:
+                    raise ValueError("weight must be non-negative")
                 criteria.append(Criterion(criterion_name, weight, True))
                 for c, system in enumerate(self.SYSTEMS, start=2):
                     value = float(self.table.item(r, c).text())
@@ -92,8 +94,8 @@ class RadarTab(QWidget):
 
     def run_analysis(self) -> None:
         try:
-            self.scores, criteria = self._read_table()
-            self.ranked = weighted_scores(self.scores, criteria)
+            self.scores, self.criteria = self._read_table()
+            self.ranked = weighted_scores(self.scores, self.criteria)
             self.plot_panel.set_figure(radar_figure(self.scores, self.CRITERIA))
             self.ranking.setRowCount(len(self.ranked))
             for r, row in self.ranked.iterrows():
@@ -109,6 +111,7 @@ class RadarTab(QWidget):
                 "analysis": "Multi-criteria radar comparison",
                 "provenance": self.provenance.currentText(),
                 "scale": "1 to 5; higher is better for every criterion",
+                "weights": {c.name: c.weight for c in self.criteria},
                 "scores": self.scores.to_dict(orient="records"),
                 "ranking": self.ranked[["system", "weighted_score"]].to_dict(orient="records"),
                 "warning": "Expert scores must be supported by traceable evidence before quantitative publication claims.",
