@@ -5,6 +5,10 @@ from dataclasses import dataclass, asdict
 import numpy as np
 import pandas as pd
 
+MIN_GAP_M = 0.0015
+MAX_GAP_M = 0.016
+MIN_COMPLETE_RUN_TIME_S = 75.0
+
 
 @dataclass(frozen=True)
 class RolloutParameters:
@@ -62,6 +66,34 @@ def _smoothstep(a: float) -> tuple[float, float]:
     return s, ds_da
 
 
+def _validate_parameters(params: RolloutParameters) -> None:
+    if not np.isfinite(params.dt_s) or params.dt_s <= 0:
+        raise ValueError("Time step must be finite and positive.")
+    if not np.isfinite(params.end_time_s) or params.end_time_s < MIN_COMPLETE_RUN_TIME_S:
+        raise ValueError(
+            f"Simulation duration must be at least {MIN_COMPLETE_RUN_TIME_S:g} s so transfer and hard-lock metrics are defined."
+        )
+    if not np.isfinite(params.track_length_m) or params.track_length_m <= 0:
+        raise ValueError("Track length must be finite and positive.")
+    if params.platform_mass_kg <= 0 or params.payload_mass_kg < 0:
+        raise ValueError("Mass values are invalid.")
+    if not (MIN_GAP_M <= params.initial_gap_m <= MAX_GAP_M):
+        raise ValueError(f"Initial gap must be between {MIN_GAP_M:g} m and {MAX_GAP_M:g} m.")
+    if not (MIN_GAP_M <= params.target_gap_m <= MAX_GAP_M):
+        raise ValueError(f"Target gap must be between {MIN_GAP_M:g} m and {MAX_GAP_M:g} m.")
+    for name, value in (
+        ("coil_fault_index", params.coil_fault_index),
+        ("sensor_fault_index", params.sensor_fault_index),
+        ("leak_index", params.leak_index),
+    ):
+        if not isinstance(value, (int, np.integer)) or not 0 <= int(value) <= 8:
+            raise ValueError(f"{name} must be an integer from 0 to 8 (0 disables the fault).")
+    if params.wind_end_s <= params.wind_start_s:
+        raise ValueError("Wind end time must be later than wind start time.")
+    if params.sensor_fault_end_s <= params.sensor_fault_start_s:
+        raise ValueError("Sensor fault end time must be later than sensor fault start time.")
+
+
 def _scenario(t: float, p: RolloutParameters) -> dict[str, float]:
     cgx = p.cg_shift_x_m if t > p.cg_shift_time_s else 0.0
     cgy = p.cg_shift_y_m if t > p.cg_shift_time_s else 0.0
@@ -105,10 +137,7 @@ def _scenario(t: float, p: RolloutParameters) -> dict[str, float]:
 
 
 def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str, float]]:
-    if params.dt_s <= 0 or params.end_time_s <= 10:
-        raise ValueError("Time step must be positive and simulation duration must exceed 10 s.")
-    if params.platform_mass_kg <= 0 or params.payload_mass_kg < 0:
-        raise ValueError("Mass values are invalid.")
+    _validate_parameters(params)
     t_values = np.arange(0.0, params.end_time_s + params.dt_s / 2, params.dt_s)
     state = _State(z=params.initial_gap_m)
     px = np.array([-0.55, 0.0, 0.55, -0.55, 0.55, -0.55, 0.0, 0.55])
@@ -139,7 +168,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
 
         unsafe = int(
             np.max(np.abs(gaps_for_control - sc["gap_ref"])) > 0.003
-            or np.min(gaps_for_control) < 0.0015
+            or np.min(gaps_for_control) < MIN_GAP_M
             or abs(state.roll) > 0.075
             or abs(state.pitch) > 0.075
         )
@@ -166,7 +195,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         force_ref = np.clip(force_ref, 0.0, 320.0)
 
         kmag = 3e-4
-        i_cmd = np.sqrt(np.maximum(force_ref * np.maximum(gaps_for_control, 0.0015) ** 2 / kmag, 0.0))
+        i_cmd = np.sqrt(np.maximum(force_ref * np.maximum(gaps_for_control, MIN_GAP_M) ** 2 / kmag, 0.0))
         i_cmd = np.clip(i_cmd, 0.0, 10.0)
         area_p = 1.5e-4
         target_pneumatic_total = max(0.0, lock_fraction * total_force_cmd)
@@ -194,7 +223,7 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         pneumatic_force = np.zeros(8)
         pressure_measured = np.zeros(8)
         for i in range(8):
-            gap_i = max(float(gaps_for_control[i]), 0.0015)
+            gap_i = max(float(gaps_for_control[i]), MIN_GAP_M)
             efficiency = 0.35 if sc["fault_index"] == i + 1 else 1.0
             em_force[i] = min(320.0, efficiency * kmag * state.i_actual[i] ** 2 / gap_i**2)
             leak = 0.60 if sc["leak_index"] == i + 1 else 1.0
@@ -230,11 +259,11 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         state.pitch += params.dt_s * state.q
         state.r += params.dt_s * rdot
         state.yaw += params.dt_s * state.r
-        if state.z < 0.0015:
-            state.z = 0.0015
+        if state.z < MIN_GAP_M:
+            state.z = MIN_GAP_M
             state.vz = max(state.vz, 0.0)
-        if state.z > 0.016:
-            state.z = 0.016
+        if state.z > MAX_GAP_M:
+            state.z = MAX_GAP_M
             state.vz = min(state.vz, 0.0)
         measured_gaps = np.maximum(state.z + state.roll * py + state.pitch * px, 0.0008)
         measured_pneumatic = pneumatic_force.copy()
@@ -275,6 +304,8 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
     after_levitation = df["time_s"] > 10
     transfer = (df["time_s"] > 56) & (df["time_s"] < 72)
     hard_lock = df["time_s"] > 74
+    if not after_levitation.any() or not transfer.any() or not hard_lock.any():
+        raise RuntimeError("Required rollout validation phases were not sampled; reduce dt or increase end time.")
     metrics = {
         "design_weight_n": weight,
         "maximum_gap_error_after_levitation_mm": float(
