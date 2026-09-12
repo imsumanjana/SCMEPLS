@@ -69,8 +69,13 @@ def _safe_component_id(raw: str, index: int) -> str:
 def _scene_from_path(path: Path) -> trimesh.Scene:
     try:
         if path.suffix.lower() == ".stl":
-            loaded = trimesh.load_mesh(path, process=False)
+            # STL stores independent triangle vertices and has no topology graph.
+            # Processing is required here to merge coincident vertices so a genuinely
+            # closed exported solid is recognized as watertight for structural meshing.
+            loaded = trimesh.load_mesh(path, process=True)
             return loaded if isinstance(loaded, trimesh.Scene) else trimesh.Scene(loaded)
+        # Preserve GLB scene hierarchy/named nodes; structural validation is applied
+        # later to the explicitly selected part.
         return trimesh.load_scene(path, process=False)
     except Exception as exc:  # pragma: no cover - backend-specific details
         raise GeometryImportError(f"Could not read geometry file: {exc}") from exc
@@ -137,13 +142,16 @@ def _validate_topology(component_id: str, vertices: np.ndarray, faces: np.ndarra
 
 
 def load_geometry(path: str | Path, source_unit: str = "m", axis_mode: str = "auto") -> GeometryAsset:
-    """Load a GLB or STL file and convert geometry coordinates to metres.
+    """Load a GLB or STL file and normalize geometry coordinates to SI metres.
 
-    The imported mesh is visualization data only. It does not modify SC-MEPLS
-    mass, inertia, actuator locations, controller gains, or any simulation state.
-    STL carries no unit metadata, so ``source_unit`` is always authoritative.
-    In ``auto`` axis mode, GLB/glTF Y-up geometry is rotated into SC-MEPLS Z-up;
-    STL coordinates are kept as stored.
+    This loader is shared by visualization and the structural FEA pipeline so both
+    consume the identical coordinates, scale, and axis convention. Loading a file
+    alone does not mutate SC-MEPLS dynamics; geometry-derived mass/inertia/dimensions
+    are coupled explicitly by the FEA mass-properties workflow.
+
+    STL carries no unit metadata, so ``source_unit`` is authoritative. In ``auto``
+    axis mode, GLB/glTF Y-up geometry is rotated into SC-MEPLS Z-up; STL coordinates
+    are kept as stored.
     """
 
     source = Path(path).expanduser().resolve()
