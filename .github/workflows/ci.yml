@@ -1,0 +1,35 @@
+name: SC-MEPLS CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+    env:
+      MPLBACKEND: Agg
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install . pytest
+      - name: Verify installed package metadata and resource
+        run: |
+          python -c "import scmepls_studio; from scmepls_studio.config import DEFAULT_PROJECT_PATH; print(scmepls_studio.__version__); assert DEFAULT_PROJECT_PATH.exists()"
+      - name: Run test suite
+        run: python -m pytest -q
