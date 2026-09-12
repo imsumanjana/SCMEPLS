@@ -8,6 +8,10 @@ import pandas as pd
 MIN_GAP_M = 0.0015
 MAX_GAP_M = 0.016
 MIN_COMPLETE_RUN_TIME_S = 75.0
+MAX_TIME_STEP_S = 0.02
+CURRENT_TIME_CONSTANT_S = 0.035
+PRESSURE_TIME_CONSTANT_S = 0.18
+VIBRATION_RMS_TIME_CONSTANT_S = 1.0
 
 
 @dataclass(frozen=True)
@@ -31,7 +35,6 @@ class RolloutParameters:
     sensor_fault_index: int = 5
     leak_time_s: float = 56.0
     leak_index: int = 6
-    seed: int = 1
 
 
 @dataclass
@@ -67,8 +70,8 @@ def _smoothstep(a: float) -> tuple[float, float]:
 
 
 def _validate_parameters(params: RolloutParameters) -> None:
-    if not np.isfinite(params.dt_s) or params.dt_s <= 0:
-        raise ValueError("Time step must be finite and positive.")
+    if not np.isfinite(params.dt_s) or params.dt_s <= 0 or params.dt_s > MAX_TIME_STEP_S:
+        raise ValueError(f"Time step must be finite, positive, and no greater than {MAX_TIME_STEP_S:g} s.")
     if not np.isfinite(params.end_time_s) or params.end_time_s < MIN_COMPLETE_RUN_TIME_S:
         raise ValueError(
             f"Simulation duration must be at least {MIN_COMPLETE_RUN_TIME_S:g} s so transfer and hard-lock metrics are defined."
@@ -147,63 +150,79 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
     weight = mass * gravity
     rows: list[dict[str, float]] = []
 
-    measured_gaps = np.full(8, params.initial_gap_m)
+    true_gaps = np.full(8, params.initial_gap_m)
     measured_pneumatic = np.zeros(8)
+    current_alpha = 1.0 - np.exp(-params.dt_s / CURRENT_TIME_CONSTANT_S)
+    pressure_alpha = 1.0 - np.exp(-params.dt_s / PRESSURE_TIME_CONSTANT_S)
+    vibration_alpha = 1.0 - np.exp(-params.dt_s / VIBRATION_RMS_TIME_CONSTANT_S)
 
     for t in t_values:
         sc = _scenario(float(t), params)
-        health = np.ones(8)
-        severity = 0.0
+
+        actual_coil_efficiency = np.ones(8)
         if sc["fault_index"]:
-            health[int(sc["fault_index"]) - 1] = 0.35
-            severity = max(severity, 0.65)
+            actual_coil_efficiency[int(sc["fault_index"]) - 1] = 0.35
+        health = actual_coil_efficiency.copy()
+        severity = 0.65 if sc["fault_index"] else 0.0
         if sc["leak_index"]:
             severity = max(severity, 0.40)
-        gaps_for_control = measured_gaps.copy()
+
+        measured_gaps = true_gaps.copy()
+        estimated_gaps = measured_gaps.copy()
         if sc["sensor_fault_index"]:
             idx = int(sc["sensor_fault_index"]) - 1
-            gaps_for_control[idx] += 0.0015
-            gaps_for_control[idx] = float(np.median(np.delete(gaps_for_control, idx)))
+            measured_gaps[idx] += 0.0015
+            estimated_gaps[idx] = float(np.median(np.delete(measured_gaps, idx)))
             severity = max(severity, 0.25)
 
-        unsafe = int(
-            np.max(np.abs(gaps_for_control - sc["gap_ref"])) > 0.003
-            or np.min(gaps_for_control) < MIN_GAP_M
+        physical_unsafe = int(
+            np.max(np.abs(true_gaps - sc["gap_ref"])) > 0.003
+            or np.min(true_gaps) < MIN_GAP_M
             or abs(state.roll) > 0.075
             or abs(state.pitch) > 0.075
         )
-        if unsafe:
+        if physical_unsafe:
             severity = max(severity, 0.85)
-        lock_fraction = max(sc["lock_fraction"], 0.65) if unsafe else sc["lock_fraction"]
+
+        docking_ready = bool(
+            sc["mode"] >= 3
+            and abs(state.x - params.track_length_m) <= 0.05
+            and abs(state.y) <= 0.02
+            and abs(state.yaw) <= 0.05
+        )
+        lock_fraction = sc["lock_fraction"] if docking_ready else 0.0
+        if physical_unsafe and docking_ready:
+            lock_fraction = max(lock_fraction, 0.65)
 
         kz, dz = 14000.0, 600.0
         total_force_cmd = weight + kz * (sc["gap_ref"] - state.z) - dz * state.vz
         total_force_cmd = float(np.clip(total_force_cmd, 0.70 * weight, 1.12 * weight))
         mx_des = -weight * sc["cgy"] - 5000.0 * state.roll - 450.0 * state.p
         my_des = -weight * sc["cgx"] - 6000.0 * state.pitch - 500.0 * state.q
-        em_health = np.maximum(health, 0.05)
+        allocator_health = np.maximum(health, 0.05)
         pneumatic_measured_total = float(np.sum(measured_pneumatic))
         em_total = max(0.0, total_force_cmd - pneumatic_measured_total)
         if sc["mode"] >= 6:
             em_total = min(em_total, 0.08 * weight)
-        base_share = em_total * em_health / max(np.sum(em_health), 1e-9)
-        den_y = np.sum(py**2 * em_health) + 1e-9
-        den_x = np.sum(px**2 * em_health) + 1e-9
-        force_ref = base_share + em_health * (mx_des * py / den_y + my_des * px / den_x)
-        mean_gap = float(np.mean(gaps_for_control))
-        force_ref += 10000.0 * (sc["gap_ref"] - gaps_for_control) + 0.25 * 10000.0 * (mean_gap - gaps_for_control)
+        base_share = em_total * allocator_health / max(np.sum(allocator_health), 1e-9)
+        den_y = np.sum(py**2 * allocator_health) + 1e-9
+        den_x = np.sum(px**2 * allocator_health) + 1e-9
+        force_ref = base_share + allocator_health * (mx_des * py / den_y + my_des * px / den_x)
+        mean_gap = float(np.mean(estimated_gaps))
+        force_ref += 10000.0 * (sc["gap_ref"] - estimated_gaps) + 0.25 * 10000.0 * (mean_gap - estimated_gaps)
         force_ref = np.clip(force_ref, 0.0, 320.0)
 
         kmag = 3e-4
-        i_cmd = np.sqrt(np.maximum(force_ref * np.maximum(gaps_for_control, MIN_GAP_M) ** 2 / kmag, 0.0))
+        efficiency_estimate = np.maximum(health, 0.05)
+        i_cmd = np.sqrt(
+            np.maximum(force_ref * np.maximum(estimated_gaps, MIN_GAP_M) ** 2 / (kmag * efficiency_estimate), 0.0)
+        )
         i_cmd = np.clip(i_cmd, 0.0, 10.0)
+
         area_p = 1.5e-4
         target_pneumatic_total = max(0.0, lock_fraction * total_force_cmd)
         target_per_module = np.full(8, target_pneumatic_total / 8)
-        leak_factor = np.ones(8)
-        if sc["leak_index"]:
-            leak_factor[int(sc["leak_index"]) - 1] = 0.60
-        p_cmd = np.minimum(8e5, target_per_module / (area_p * np.maximum(leak_factor, 0.20)))
+        p_cmd = np.minimum(8e5, target_per_module / area_p)
 
         fx = 520.0 * (sc["x_ref"] - state.x) + 165.0 * (sc["v_ref"] - state.vx)
         fy = -240.0 * state.y - 75.0 * state.vy - sc["wind_y"]
@@ -214,18 +233,20 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         fy = float(np.clip(fy, -80.0, 80.0))
         mz_cmd = float(np.clip(mz_cmd, -45.0, 45.0))
 
-        state.i_actual += (params.dt_s / 0.035) * (i_cmd - state.i_actual)
+        state.i_actual += current_alpha * (i_cmd - state.i_actual)
         state.i_actual = np.clip(state.i_actual, 0.0, 10.0)
-        state.p_actual += (params.dt_s / 0.18) * (p_cmd - state.p_actual)
+        state.p_actual += pressure_alpha * (p_cmd - state.p_actual)
         state.p_actual = np.clip(state.p_actual, 0.0, 8e5)
 
         em_force = np.zeros(8)
         pneumatic_force = np.zeros(8)
         pressure_measured = np.zeros(8)
         for i in range(8):
-            gap_i = max(float(gaps_for_control[i]), MIN_GAP_M)
-            efficiency = 0.35 if sc["fault_index"] == i + 1 else 1.0
-            em_force[i] = min(320.0, efficiency * kmag * state.i_actual[i] ** 2 / gap_i**2)
+            physical_gap = max(float(true_gaps[i]), 0.0008)
+            em_force[i] = min(
+                320.0,
+                actual_coil_efficiency[i] * kmag * state.i_actual[i] ** 2 / physical_gap**2,
+            )
             leak = 0.60 if sc["leak_index"] == i + 1 else 1.0
             pressure_measured[i] = leak * state.p_actual[i]
             pneumatic_force[i] = max(0.0, pressure_measured[i] * area_p)
@@ -265,9 +286,10 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
         if state.z > MAX_GAP_M:
             state.z = MAX_GAP_M
             state.vz = min(state.vz, 0.0)
-        measured_gaps = np.maximum(state.z + state.roll * py + state.pitch * px, 0.0008)
+
+        true_gaps = np.maximum(state.z + state.roll * py + state.pitch * px, 0.0008)
         measured_pneumatic = pneumatic_force.copy()
-        state.vib2 = 0.995 * state.vib2 + 0.005 * (az**2 + ax**2)
+        state.vib2 += vibration_alpha * ((az**2 + ax**2) - state.vib2)
         total_support = fz + fz_lock
 
         row = {
@@ -278,25 +300,26 @@ def simulate_rollout(params: RolloutParameters) -> tuple[pd.DataFrame, dict[str,
             "vx_mps": state.vx,
             "z_m": state.z,
             "gap_ref_m": sc["gap_ref"],
-            "mean_gap_m": float(np.mean(measured_gaps)),
-            "min_gap_m": float(np.min(measured_gaps)),
-            "max_gap_m": float(np.max(measured_gaps)),
+            "mean_gap_m": float(np.mean(true_gaps)),
+            "min_gap_m": float(np.min(true_gaps)),
+            "max_gap_m": float(np.max(true_gaps)),
             "roll_rad": state.roll,
             "pitch_rad": state.pitch,
             "yaw_rad": state.yaw,
             "ax_mps2": ax,
             "az_mps2": az,
-            "vibration_rms_proxy": float(np.sqrt(state.vib2)),
+            "vibration_rms_proxy": float(np.sqrt(max(state.vib2, 0.0))),
             "em_force_n": float(np.sum(em_force)),
             "pneumatic_force_n": float(np.sum(pneumatic_force)),
             "total_support_force_n": total_support,
             "lock_fraction": lock_fraction,
+            "docking_ready": int(docking_ready),
             "fault_severity": severity,
-            "unsafe_flag": unsafe,
+            "unsafe_flag": physical_unsafe,
             "wind_force_n": sc["wind_y"],
         }
         for i in range(8):
-            row[f"gap_{i+1}_m"] = measured_gaps[i]
+            row[f"gap_{i+1}_m"] = true_gaps[i]
             row[f"health_{i+1}"] = health[i]
         rows.append(row)
 
