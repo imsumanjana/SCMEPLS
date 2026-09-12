@@ -1,3 +1,5 @@
 """SC-MEPLS Analysis Studio package."""
 
-__version__ = "1.1.5"
+from .version import __version__
+
+__all__ = ["__version__"]
