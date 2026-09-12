@@ -35,6 +35,15 @@ class ResponseMetrics:
     itae: float
 
 
+def _trapezoidal_integral(values: np.ndarray, time_s: np.ndarray) -> float:
+    """Integrate compatibly across the declared NumPy 1.26+ support range."""
+    trapezoid = getattr(np, "trapezoid", None)
+    if trapezoid is not None:
+        return float(trapezoid(values, time_s))
+    # NumPy 1.26 retains trapz while newer NumPy releases may remove it.
+    return float(np.trapz(values, time_s))
+
+
 def transfer_function(params: ResponseParameters) -> signal.TransferFunction:
     if params.model_type == "first_order":
         if params.time_constant_s <= 0:
@@ -72,6 +81,10 @@ def calculate_response_metrics(t: np.ndarray, y: np.ndarray, reference: float = 
     y = np.asarray(y, dtype=float)
     if t.size != y.size or t.size < 10:
         raise ValueError("Step response arrays must have equal length and at least 10 points.")
+    if not np.isfinite(t).all() or not np.isfinite(y).all():
+        raise ValueError("Step response arrays must contain only finite values.")
+    if np.any(np.diff(t) <= 0):
+        raise ValueError("Step response time values must be strictly increasing.")
     final = float(np.mean(y[-max(10, y.size // 50):]))
     target_for_rise = final if abs(final) > 1e-12 else reference
     low, high = 0.1 * target_for_rise, 0.9 * target_for_rise
@@ -87,9 +100,8 @@ def calculate_response_metrics(t: np.ndarray, y: np.ndarray, reference: float = 
     peak = float(np.max(y))
     overshoot = max(0.0, 100.0 * (peak - target_for_rise) / max(abs(target_for_rise), 1e-9))
     error = reference - y
-    # np.trapz is retained for the declared NumPy >=1.26 compatibility floor.
-    iae = float(np.trapz(np.abs(error), t))
-    itae = float(np.trapz(t * np.abs(error), t))
+    iae = _trapezoidal_integral(np.abs(error), t)
+    itae = _trapezoidal_integral(t * np.abs(error), t)
     return ResponseMetrics(
         rise_time_s=rise,
         settling_time_s=settling,
