@@ -151,8 +151,42 @@ class StructuralFrameResult:
         return grid
 
 
+def _preview_radius_for_minimum_boundary_nodes(
+    mesh: TetraMesh,
+    points_m: np.ndarray,
+    *,
+    minimum_nodes: int,
+    base_radius_m: float,
+) -> float:
+    """Choose a preview-only patch radius that can carry a 3-D wrench.
+
+    Quantitative FEA never uses this helper: real analyses must provide explicit
+    ``.fea.json`` patch radii.  The automatic mapping exists only for software
+    tests and visual preview, where very coarse meshes may otherwise collapse a
+    load region to one or two nodes and make the six-equation wrench distributor
+    mathematically underdetermined.
+    """
+    boundary = mesh.nodes_m[mesh.boundary_node_indices]
+    count = int(minimum_nodes)
+    if count < 1 or len(boundary) < count:
+        raise ValueError("Preview mesh does not contain enough boundary nodes for the requested load patch.")
+    points = np.atleast_2d(np.asarray(points_m, dtype=float))
+    required = float(base_radius_m)
+    for point in points:
+        distances = np.linalg.norm(boundary - point[None, :], axis=1)
+        kth = float(np.partition(distances, count - 1)[count - 1])
+        required = max(required, np.nextafter(kth, np.inf))
+    return required
+
+
 def auto_structural_load_map(mesh: TetraMesh) -> StructuralLoadMap:
-    """Generate deterministic fallback locations for software tests/preview only."""
+    """Generate deterministic fallback locations for software tests/preview only.
+
+    Preview patch sizes adapt to the boundary-node spacing so moment-carrying
+    propulsion and lock regions still contain at least three nodes on deliberately
+    coarse test meshes.  This does *not* relax the strict explicit-manifest checks
+    used by the real structural-validation workflow.
+    """
     lower, upper = mesh.bounds_m
     center = 0.5 * (lower + upper)
     half = 0.5 * (upper - lower)
@@ -179,6 +213,18 @@ def auto_structural_load_map(mesh: TetraMesh) -> StructuralLoadMap:
     )
     characteristic = max(float(np.max(mesh.dimensions_m)), 1e-6)
     radius = 0.08 * characteristic
+    propulsion_radius = _preview_radius_for_minimum_boundary_nodes(
+        mesh,
+        propulsion,
+        minimum_nodes=3,
+        base_radius_m=1.5 * radius,
+    )
+    lock_radius = _preview_radius_for_minimum_boundary_nodes(
+        mesh,
+        locks,
+        minimum_nodes=3,
+        base_radius_m=radius,
+    )
     return StructuralLoadMap(
         modules,
         constraints,
@@ -186,9 +232,9 @@ def auto_structural_load_map(mesh: TetraMesh) -> StructuralLoadMap:
         wind,
         locks,
         module_patch_radius_m=radius,
-        propulsion_patch_radius_m=1.5 * radius,
+        propulsion_patch_radius_m=propulsion_radius,
         wind_patch_radius_m=1.5 * radius,
-        lock_patch_radius_m=radius,
+        lock_patch_radius_m=lock_radius,
         source="auto_bounds_preview_only",
     )
 
