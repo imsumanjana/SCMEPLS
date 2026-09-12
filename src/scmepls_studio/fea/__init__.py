@@ -9,8 +9,17 @@ from .coupling import (
     map_structural_locations,
     validate_structural_mapping,
 )
+from .load_distribution import (
+    LoadPatch,
+    add_patch_force,
+    add_wrench_on_nodes,
+    boundary_load_patch,
+    patch_union,
+)
 from .mass_properties import (
+    PayloadMassProperties,
     StructuralMassProperties,
+    combine_platform_and_payload,
     rollout_parameters_from_structure,
     structural_mass_properties,
 )
@@ -32,6 +41,7 @@ from .structural_manifest import (
     structural_manifest_path_for_geometry,
 )
 from .validation import (
+    MeshConvergencePoint,
     MeshQualitySummary,
     StructuralCheckpoint,
     StructuralValidationReport,
@@ -44,9 +54,12 @@ from .validation import (
 __all__ = [
     "FEAResult",
     "IsotropicMaterial",
+    "LoadPatch",
+    "MeshConvergencePoint",
     "MeshQualitySummary",
     "MeshingOptions",
     "NodeMapping",
+    "PayloadMassProperties",
     "StaticElasticSolver",
     "StructuralCheckpoint",
     "StructuralFrameResult",
@@ -59,13 +72,18 @@ __all__ = [
     "TetraMesh",
     "TetraMeshError",
     "VolumeMeshingError",
+    "add_patch_force",
+    "add_wrench_on_nodes",
     "auto_structural_load_map",
+    "boundary_load_patch",
+    "combine_platform_and_payload",
     "constrained_dofs",
     "critical_frame_indices",
     "elasticity_matrix",
     "load_structural_manifest",
     "map_structural_locations",
     "mesh_quality_summary",
+    "patch_union",
     "rollout_parameters_from_structure",
     "run_structural_validation",
     "select_structural_part",
