@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scmepls-analysis-studio"
-version = "1.1.5"
+dynamic = ["version"]
 description = "PyQt6 analysis studio for hybrid maglev-mechanical rocket launchpad transport analysis"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -26,6 +26,13 @@ scmepls-studio = "scmepls_studio.app:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "scmepls_studio.version.__version__"}
+
+[tool.setuptools.package-data]
+scmepls_studio = ["resources/*.json"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
