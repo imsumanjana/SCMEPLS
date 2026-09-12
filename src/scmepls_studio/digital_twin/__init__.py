@@ -2,6 +2,7 @@
 
 from .binding import SceneBinding, SceneBindingRegistry, build_scene_bindings
 from .mesh import MeshDisplayMode, MeshRecord, MeshRegistry, actor_style, polydata_from_part
+from .physics import DigitalTwinFrame, ModuleState, RigidBodyState, SimulationTimeline
 
 __all__ = [
     "SceneBinding",
@@ -12,4 +13,8 @@ __all__ = [
     "MeshRegistry",
     "actor_style",
     "polydata_from_part",
+    "RigidBodyState",
+    "ModuleState",
+    "DigitalTwinFrame",
+    "SimulationTimeline",
 ]
