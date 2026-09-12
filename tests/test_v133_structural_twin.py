@@ -82,7 +82,9 @@ def test_structural_twin_maps_rollout_forces_to_nodes_and_solves_frame():
         _timeline(),
         RolloutParameters(platform_mass_kg=100.0, payload_mass_kg=0.0),
         load_map,
-        maximum_snap_distance_m=0.2,
+        # This deliberately coarse eight-node cube has no mid-edge nodes, so
+        # the automatic fallback locations can be 0.5 m from the nearest node.
+        maximum_snap_distance_m=0.6,
     )
     result = twin.solve_frame(0)
     assert result.fea.displacement_m.shape == (mesh.node_count, 3)
