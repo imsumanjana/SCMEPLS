@@ -87,8 +87,9 @@ def calculate_response_metrics(t: np.ndarray, y: np.ndarray, reference: float = 
     peak = float(np.max(y))
     overshoot = max(0.0, 100.0 * (peak - target_for_rise) / max(abs(target_for_rise), 1e-9))
     error = reference - y
-    iae = float(np.trapezoid(np.abs(error), t))
-    itae = float(np.trapezoid(t * np.abs(error), t))
+    # np.trapz is retained for the declared NumPy >=1.26 compatibility floor.
+    iae = float(np.trapz(np.abs(error), t))
+    itae = float(np.trapz(t * np.abs(error), t))
     return ResponseMetrics(
         rise_time_s=rise,
         settling_time_s=settling,
