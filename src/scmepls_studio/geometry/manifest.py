@@ -5,12 +5,15 @@ import json
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 
 class GeometryManifestError(ValueError):
     """Raised when a geometry sidecar manifest is malformed or inconsistent."""
 
 
 _ALLOWED_DYNAMIC_GROUPS = {"world", "platform", "module", "lock"}
+_ALLOWED_MOTION_SIGNALS = {"none", "lock_fraction"}
 
 
 def _vector3(value: Any, name: str, *, allow_none: bool = False) -> tuple[float, float, float] | None:
@@ -24,9 +27,19 @@ def _vector3(value: Any, name: str, *, allow_none: bool = False) -> tuple[float,
         vector = tuple(float(v) for v in value)
     except (TypeError, ValueError) as exc:
         raise GeometryManifestError(f"Manifest '{name}' must contain numeric values.") from exc
-    if not all(abs(v) < float("inf") for v in vector):
+    if not all(np.isfinite(v) for v in vector):
         raise GeometryManifestError(f"Manifest '{name}' must contain finite values.")
     return vector  # type: ignore[return-value]
+
+
+def _motion_axis(value: Any, name: str) -> tuple[float, float, float] | None:
+    axis = _vector3(value, name, allow_none=True)
+    if axis is None:
+        return None
+    norm = float(np.linalg.norm(axis))
+    if norm <= 1e-12:
+        raise GeometryManifestError(f"Manifest '{name}' must have non-zero length.")
+    return tuple(float(v / norm) for v in axis)
 
 
 @dataclass(frozen=True)
@@ -36,6 +49,9 @@ class ComponentBinding:
     dynamic_group: str = "world"
     simulation_module: int | None = None
     pivot_m: tuple[float, float, float] | None = None
+    motion_axis: tuple[float, float, float] | None = None
+    stroke_m: float = 0.0
+    motion_signal: str = "none"
 
 
 @dataclass(frozen=True)
@@ -60,9 +76,11 @@ def load_geometry_manifest(path: str | Path, available_component_ids: set[str] |
         raw: dict[str, Any] = json.loads(source.read_text(encoding="utf-8"))
     except Exception as exc:
         raise GeometryManifestError(f"Could not read geometry manifest: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise GeometryManifestError("Geometry manifest root must be a JSON object.")
 
     schema_version = int(raw.get("schema_version", 1))
-    if schema_version != 1:
+    if schema_version not in {1, 2}:
         raise GeometryManifestError(f"Unsupported geometry manifest schema_version: {schema_version}")
 
     platform_origin = _vector3(raw.get("platform_origin_m"), "platform_origin_m")
@@ -95,12 +113,32 @@ def load_geometry_manifest(path: str | Path, available_component_ids: set[str] |
                 f"Manifest entry '{component_id}' dynamic_group must be one of {sorted(_ALLOWED_DYNAMIC_GROUPS)}."
             )
         pivot = _vector3(spec.get("pivot_m"), f"components.{component_id}.pivot_m", allow_none=True)
+        axis = _motion_axis(spec.get("motion_axis"), f"components.{component_id}.motion_axis")
+        try:
+            stroke = float(spec.get("stroke_m", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise GeometryManifestError(f"Manifest entry '{component_id}' stroke_m must be numeric.") from exc
+        if not np.isfinite(stroke) or stroke < 0.0:
+            raise GeometryManifestError(f"Manifest entry '{component_id}' stroke_m must be finite and non-negative.")
+        motion_signal = str(spec.get("motion_signal", "none")).strip().lower()
+        if motion_signal not in _ALLOWED_MOTION_SIGNALS:
+            raise GeometryManifestError(
+                f"Manifest entry '{component_id}' motion_signal must be one of {sorted(_ALLOWED_MOTION_SIGNALS)}."
+            )
+        if stroke > 0.0 and axis is None:
+            raise GeometryManifestError(f"Manifest entry '{component_id}' with non-zero stroke_m requires motion_axis.")
+        if stroke > 0.0 and motion_signal == "none":
+            raise GeometryManifestError(f"Manifest entry '{component_id}' with non-zero stroke_m requires motion_signal.")
+
         components[component_id] = ComponentBinding(
             component_id=component_id,
             role=str(spec.get("role", "visual")).strip() or "visual",
             dynamic_group=dynamic_group,
             simulation_module=simulation_module,
             pivot_m=pivot,
+            motion_axis=axis,
+            stroke_m=stroke,
+            motion_signal=motion_signal,
         )
 
     raw_required = raw.get("required_components", [])
