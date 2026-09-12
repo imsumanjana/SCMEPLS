@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from .coupling import StructuralLoadMap
+from .mass_properties import PayloadMassProperties
 from .mesher import MeshingOptions
 from .solver import IsotropicMaterial
 
@@ -26,6 +27,7 @@ class StructuralManifest:
     meshing: MeshingOptions
     load_map: StructuralLoadMap
     maximum_snap_distance_m: float
+    payload: PayloadMassProperties | None = None
 
 
 def structural_manifest_path_for_geometry(path: str | Path) -> Path:
@@ -45,6 +47,36 @@ def _array(raw: Any, name: str, shape: tuple[int, ...] | None = None) -> np.ndar
     return array
 
 
+def _positive(raw: Any, name: str, default: float) -> float:
+    try:
+        value = float(default if raw is None else raw)
+    except (TypeError, ValueError) as exc:
+        raise StructuralManifestError(f"'{name}' must be numeric.") from exc
+    if not np.isfinite(value) or value <= 0.0:
+        raise StructuralManifestError(f"'{name}' must be finite and positive.")
+    return value
+
+
+def _payload(raw: Any, mass_scope: str) -> PayloadMassProperties | None:
+    if raw is None:
+        if mass_scope == "platform_only":
+            raise StructuralManifestError(
+                "platform_only structural coupling requires a 'payload' object with mass_kg, centroid_m, and inertia_centroid_kg_m2."
+            )
+        return None
+    if not isinstance(raw, dict):
+        raise StructuralManifestError("'payload' must be a JSON object.")
+    try:
+        mass = float(raw["mass_kg"])
+        centroid = _array(raw["centroid_m"], "payload.centroid_m", (3,))
+        inertia = _array(raw["inertia_centroid_kg_m2"], "payload.inertia_centroid_kg_m2", (3, 3))
+        return PayloadMassProperties(mass, centroid, inertia)
+    except KeyError as exc:
+        raise StructuralManifestError(f"Missing payload field: {exc.args[0]}") from exc
+    except (TypeError, ValueError) as exc:
+        raise StructuralManifestError(f"Invalid payload definition: {exc}") from exc
+
+
 def load_structural_manifest(path: str | Path) -> StructuralManifest:
     source = Path(path)
     if not source.exists() or not source.is_file():
@@ -57,7 +89,7 @@ def load_structural_manifest(path: str | Path) -> StructuralManifest:
         raise StructuralManifestError("Structural manifest root must be a JSON object.")
 
     schema_version = int(raw.get("schema_version", 1))
-    if schema_version != 1:
+    if schema_version not in {1, 2}:
         raise StructuralManifestError(f"Unsupported structural schema_version: {schema_version}")
     structural_component = raw.get("structural_component")
     if structural_component is not None:
@@ -85,12 +117,8 @@ def load_structural_manifest(path: str | Path) -> StructuralManifest:
     try:
         meshing = MeshingOptions(
             element_size_m=float(mesh.get("element_size_m", 0.025)),
-            min_element_size_m=(
-                None if mesh.get("min_element_size_m") is None else float(mesh["min_element_size_m"])
-            ),
-            max_element_size_m=(
-                None if mesh.get("max_element_size_m") is None else float(mesh["max_element_size_m"])
-            ),
+            min_element_size_m=(None if mesh.get("min_element_size_m") is None else float(mesh["min_element_size_m"])),
+            max_element_size_m=(None if mesh.get("max_element_size_m") is None else float(mesh["max_element_size_m"])),
             optimize=bool(mesh.get("optimize", True)),
             classify_angle_deg=float(mesh.get("classify_angle_deg", 40.0)),
         )
@@ -109,18 +137,35 @@ def load_structural_manifest(path: str | Path) -> StructuralManifest:
     lock_points = _array(mapping.get("lock_points_m"), "mapping.lock_points_m")
     if lock_points.ndim != 2 or lock_points.shape[1] != 3 or len(lock_points) < 1:
         raise StructuralManifestError("'mapping.lock_points_m' must have shape (N, 3) with N >= 1.")
+    payload_support = mapping.get("payload_support_points_m")
+    payload_support_points = None
+    if payload_support is not None:
+        payload_support_points = _array(payload_support, "mapping.payload_support_points_m")
+        if payload_support_points.ndim != 2 or payload_support_points.shape[1] != 3 or len(payload_support_points) < 1:
+            raise StructuralManifestError("'mapping.payload_support_points_m' must have shape (N, 3) with N >= 1.")
+
     load_map = StructuralLoadMap(
         module_points_m=module_points,
         constraint_points_m=constraint_points,
         propulsion_point_m=propulsion_point,
         wind_point_m=wind_point,
         lock_points_m=lock_points,
+        payload_support_points_m=payload_support_points,
+        module_patch_radius_m=_positive(mapping.get("module_patch_radius_m"), "mapping.module_patch_radius_m", 0.025),
+        propulsion_patch_radius_m=_positive(mapping.get("propulsion_patch_radius_m"), "mapping.propulsion_patch_radius_m", 0.035),
+        wind_patch_radius_m=_positive(mapping.get("wind_patch_radius_m"), "mapping.wind_patch_radius_m", 0.040),
+        lock_patch_radius_m=_positive(mapping.get("lock_patch_radius_m"), "mapping.lock_patch_radius_m", 0.025),
+        payload_patch_radius_m=_positive(mapping.get("payload_patch_radius_m"), "mapping.payload_patch_radius_m", 0.040),
         source="structural_manifest",
     )
 
-    maximum_snap_distance_m = float(raw.get("maximum_snap_distance_m", 0.02))
-    if not np.isfinite(maximum_snap_distance_m) or maximum_snap_distance_m <= 0:
-        raise StructuralManifestError("maximum_snap_distance_m must be finite and positive.")
+    maximum_snap_distance_m = _positive(raw.get("maximum_snap_distance_m"), "maximum_snap_distance_m", 0.02)
+    payload = _payload(raw.get("payload"), mass_scope)
+    if payload is not None and payload.mass_kg > 0.0 and payload_support_points is None:
+        raise StructuralManifestError(
+            "A non-zero payload requires mapping.payload_support_points_m so payload loads can enter the platform through physical support regions."
+        )
+
     return StructuralManifest(
         path=source,
         schema_version=schema_version,
@@ -130,4 +175,5 @@ def load_structural_manifest(path: str | Path) -> StructuralManifest:
         meshing=meshing,
         load_map=load_map,
         maximum_snap_distance_m=maximum_snap_distance_m,
+        payload=payload,
     )

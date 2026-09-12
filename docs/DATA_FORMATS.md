@@ -1,4 +1,4 @@
-# Data formats
+# Data formats — v1.4.0
 
 ## Vibration CSV
 
@@ -10,92 +10,121 @@ time_s,Crawler Transporter,Rail Platform,Maglev Platform
 0.005,0.03,0.01,0.01
 ```
 
-- `time_s` must be strictly increasing and finite.
-- Every other column is interpreted as acceleration in m/s² and must be numeric/finite.
-- Welch PSD requires approximately uniform sampling. The software rejects time histories whose maximum sample-interval deviation exceeds 2% of the median interval; resample irregular measurements before import.
-- The importer asks whether the CSV is Experimental, Simulation, or Literature-derived. It does not infer provenance from the filename.
-- Imported uncertainty is marked unspecified unless supplied/calculated separately.
+`time_s` must be strictly increasing and finite. Every other column is acceleration in m/s². Welch PSD requires approximately uniform sampling. The UI records the selected preprocessing mode (`raw`, `remove_mean`, `detrend`, or `highpass`) and high-pass cutoff when applicable.
 
 ## SC-MEPLS rollout CSV
 
-The saved time history contains aggregate rigid-body and support states plus module-level validation channels. Important groups include:
+The time history includes rigid-body truth/controller state, interlock state and module channels:
 
 ```text
 time_s, mode, mode_name
 x_m, y_m, z_m, vx_mps, vy_mps, vz_mps
 roll_rad, pitch_rad, yaw_rad
 roll_rate_rad_s, pitch_rate_rad_s, yaw_rate_rad_s
+roll_accel_rad_s2, pitch_accel_rad_s2, yaw_accel_rad_s2
 ax_mps2, ay_mps2, az_mps2
-lock_fraction, docking_ready, unsafe_flag
+lock_fraction, lock_state, hard_lock_confirmed
+docking_ready, detected_interlock, physical_truth_violation, unsafe_flag
+propulsion_force_x_n, lateral_control_force_y_n
+passive_force_x_n, passive_force_y_n, passive_force_z_n
+lock_force_x_n, lock_force_y_n, lock_force_z_n
+support_moment_x_nm, support_moment_y_nm
+gravity_moment_x_nm, gravity_moment_y_nm, wind_moment_x_nm
+yaw_control_moment_nm, lock_moment_x_nm, lock_moment_y_nm, lock_moment_z_nm
 ```
 
-For each module `i = 1...8`:
+For every module `i=1...8`:
 
 ```text
+module_x_i_m, module_y_i_m
 gap_i_m                 true physical gap
 sensor_gap_i_m          raw sensor channel
-estimated_gap_i_m       controller/fault-tolerant estimate
-health_i
-coil_efficiency_i
+estimated_gap_i_m       controller estimate
+health_i, coil_efficiency_i
 coil_current_i_a
 em_force_i_n
 pressure_i_pa
 pneumatic_force_i_n
 ```
 
-These columns are intended for independent MATLAB/Python comparison and later GLB/STL animation binding.
+`p_radps/q_radps/r_radps` are retained as aliases of the roll/pitch/yaw-rate fields for interoperability.
 
-## AI calibration CSV
-
-Use one row per independent experiment or validated simulation run. Include numeric input features and one or more numeric target columns, for example:
-
-```csv
-run_id,mass_kg,speed_mps,gap_mm,wind_n,controller_kp,rms_accel_mps2,settling_time_s,net_energy_kwh
-1,75,0.05,10,0,90,0.11,2.4,0.008
-```
-
-- Select one target at a time.
-- Select input feature columns explicitly; do not include the target or quantities derived from it.
-- For independent runs use KFold validation.
-- For chronological/time-ordered data use Chronological validation.
-- If several rows come from the same experiment/run, select a group/run column so GroupKFold is used and repeated samples cannot leak across folds.
-- Preserve an external validation dataset for final claims whenever possible.
-
-## External geometry
-
-Supported files are `.glb` and `.stl`.
-
-- SC-MEPLS world axes are X = roll-out, Y = lateral, Z = vertical.
-- GLB/glTF convention is metres and Y-up. In Auto mode the viewer converts GLB Y-up to SC-MEPLS Z-up.
-- STL is unitless, so source units (`m`, `cm`, or `mm`) must be selected explicitly.
-- Named GLB nodes are preserved as component IDs after safe-name normalization.
-
-Recommended GLB node names:
-
-```text
-TRACK
-PLATFORM
-ROCKET
-EM_M01 ... EM_M08
-PNEU_M01 ... PNEU_M08
-LOCK_L
-LOCK_R
-```
-
-### Geometry manifest sidecar
-
-For `assembly.glb`, the automatic sidecar name is `assembly.manifest.json`.
+## Geometry manifest (`<geometry>.manifest.json`)
 
 ```json
 {
-  "schema_version": 1,
-  "required_components": ["PLATFORM", "EM_M01", "EM_M02"],
+  "schema_version": 2,
+  "platform_origin_m": [0, 0, 0],
+  "required_components": ["PLATFORM", "EM_M01"],
   "components": {
-    "PLATFORM": {"role": "platform", "dynamic_group": "platform"},
-    "EM_M01": {"role": "em_module", "simulation_module": 1},
-    "EM_M02": {"role": "em_module", "simulation_module": 2}
+    "PLATFORM": {"role": "structure", "dynamic_group": "platform"},
+    "EM_M01": {"role": "electromagnetic", "dynamic_group": "module", "simulation_module": 1},
+    "PNEU_M01": {"role": "pneumatic", "dynamic_group": "module", "simulation_module": 1},
+    "LOCK_L": {
+      "role": "lock",
+      "dynamic_group": "lock",
+      "motion_axis": [1, 0, 0],
+      "stroke_m": 0.02,
+      "motion_signal": "lock_fraction"
+    }
   }
 }
 ```
 
-The manifest may only reference component IDs present in the imported geometry. Each `simulation_module` value must be 1–8 and may only be used once.
+A `simulation_module` must be 1–8. **Multiple visual parts may bind to the same module**; this is intentional for assemblies such as EM and pneumatic components belonging to M1.
+
+Supported dynamic groups are `world`, `platform`, `module`, and `lock`. `motion_axis` is normalized on import. A non-zero `stroke_m` requires an axis and supported motion signal.
+
+## Structural manifest (`<geometry>.fea.json`)
+
+A quantitative FEA run requires an explicit structural manifest. Required concepts are:
+
+```text
+schema_version
+structural_component (required for multi-part visual GLB)
+mass_scope = moving_assembly | platform_only
+material: E, nu, density, yield strength
+mesh: element size / optional min/max / optimization
+maximum_snap_distance_m
+mapping.module_points_m          shape 8×3
+mapping.constraint_points_m      shape 3×3
+mapping.propulsion_point_m       shape 3
+mapping.wind_point_m             shape 3
+mapping.lock_points_m            shape N×3
+mapping.*_patch_radius_m
+```
+
+For `platform_only`, also provide:
+
+```text
+payload.mass_kg
+payload.centroid_m                       shape 3
+payload.inertia_centroid_kg_m2           shape 3×3
+mapping.payload_support_points_m          shape N×3
+mapping.payload_patch_radius_m
+```
+
+All structural coordinates are in the imported/normalized SC-MEPLS body frame and metres. Load points are mapped to finite boundary-node patches, not single nearest nodes.
+
+## AI calibration CSV
+
+Use one row per independent sample/run as appropriate. Example:
+
+```csv
+run_id,mass_kg,speed_mps,gap_mm,wind_n,controller_kp,rms_accel_mps2
+1,75,0.05,10,0,90,0.11
+```
+
+The training dataset and external validation dataset must contain the selected feature names and target. The program reports SHA-256 fingerprints for traceability. Group/run columns are excluded from model features. Near-perfect feature/target correlation is flagged as possible leakage.
+
+## Project JSON
+
+`File > Save Project` stores:
+
+- software version and complete rollout parameter set;
+- requested dynamics source;
+- structural geometry/manifest paths, units, axis mode and validation options;
+- latest structural report snapshot where available;
+- 3D geometry/manifest path, selected component, result metric and camera state.
+
+On open, external files are reloaded/validated where appropriate. Structural meshes/results are intentionally not trusted from the saved JSON; rerun Structural Validation before reusing geometry-coupled FEA/dynamics.

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .binding import SceneBindingRegistry
+from .binding import SceneBinding, SceneBindingRegistry
 from .physics import DigitalTwinFrame, SimulationTimeline
 
 
@@ -81,18 +81,42 @@ class PlaybackController:
         return self.timeline.frame_at_time(self.current_time_s)
 
 
+def _local_actuation_transform(binding: SceneBinding, frame: DigitalTwinFrame) -> np.ndarray:
+    transform = np.eye(4, dtype=float)
+    if binding.motion_axis is None or binding.stroke_m <= 0.0 or binding.motion_signal == "none":
+        return transform
+    if binding.motion_signal == "lock_fraction":
+        fraction = float(np.clip(frame.lock_fraction, 0.0, 1.0))
+    else:  # manifest validation prevents unsupported signals
+        fraction = 0.0
+    axis = np.asarray(binding.motion_axis, dtype=float)
+    transform[:3, 3] = axis * binding.stroke_m * fraction
+    return transform
+
+
 def component_transforms(
     registry: SceneBindingRegistry,
     timeline: SimulationTimeline,
     frame: DigitalTwinFrame,
 ) -> dict[str, np.ndarray]:
-    """Build actor transforms for the frame without mutating geometry or physics."""
+    """Build group-aware actor transforms without mutating geometry or physics.
+
+    * ``world``: stationary geometry, optionally with a manifest-defined stroke.
+    * ``lock``: launchpad/world-side lock by default, with physical stroke when declared.
+    * ``platform`` and ``module``: follow the moving rigid body and then apply any
+      declared local actuator stroke in body coordinates.
+
+    This removes the previous behavior where every non-world component received the
+    same rigid-body transform and lock engagement was represented only by opacity.
+    """
     transforms: dict[str, np.ndarray] = {}
     for component_id, binding in registry.bindings.items():
-        if binding.dynamic_group == "world":
-            transforms[component_id] = np.eye(4, dtype=float)
+        local = _local_actuation_transform(binding, frame)
+        if binding.dynamic_group in {"world", "lock"}:
+            base = np.eye(4, dtype=float)
         else:
-            transforms[component_id] = timeline.relative_transform(frame, binding.pivot_m)
+            base = timeline.relative_transform(frame, binding.pivot_m)
+        transforms[component_id] = base @ local
     return transforms
 
 
