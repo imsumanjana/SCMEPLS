@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 from PyQt6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -100,7 +102,7 @@ class VibrationTab(QWidget):
                 seed=self.seed.value(),
             )
             self.provenance.setCurrentText("Illustrative")
-            self._process()
+            self._process(imported=False)
         except Exception as exc:
             QMessageBox.critical(self, "Vibration analysis error", str(exc))
 
@@ -108,17 +110,28 @@ class VibrationTab(QWidget):
         path, _ = QFileDialog.getOpenFileName(self, "Import vibration time series", "", "CSV files (*.csv)")
         if not path:
             return
+        options = ["Experimental", "Simulation", "Literature-derived"]
+        provenance, accepted = QInputDialog.getItem(
+            self,
+            "Imported data provenance",
+            "Select the provenance of this CSV:",
+            options,
+            0,
+            False,
+        )
+        if not accepted:
+            return
         try:
             self.dataframe = pd.read_csv(path)
-            self.provenance.setCurrentText("Experimental")
-            self._process()
+            self.provenance.setCurrentText(str(provenance))
+            self._process(imported=True)
         except Exception as exc:
             QMessageBox.critical(self, "CSV import error", str(exc))
 
-    def _process(self) -> None:
+    def _process(self, imported: bool) -> None:
         assert self.dataframe is not None
         self.metrics = metrics_from_dataframe(self.dataframe)
-        self.metrics["uncertainty"] = 0.0
+        self.metrics["uncertainty"] = np.nan if imported else 0.0
         self._fill_table()
         self.plot_panel.set_figure(vibration_figure(self.metrics))
         self.series_panel.set_figure(vibration_timeseries_figure(self.dataframe))
@@ -149,6 +162,7 @@ class VibrationTab(QWidget):
                     "analysis": "Normalized RMS vibration comparison",
                     "provenance": self.provenance.currentText(),
                     "equation": "a_RMS = sqrt(mean(a(t)^2)); normalized by maximum/reference RMS",
+                    "uncertainty_status": "Not supplied for imported data" if self.metrics is not None and self.metrics["uncertainty"].isna().all() else "Configured in metrics table",
                     "warning": "Illustrative values are not direct experimental measurements." if self.provenance.currentText() == "Illustrative" else "",
                 },
             )
