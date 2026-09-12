@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 import json
 from pathlib import Path
 
 import numpy as np
-import pyvista as pv
 from pyvistaqt import QtInteractor
 from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtWidgets import (
@@ -23,7 +21,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ...fea import run_structural_validation
+from ...fea import (
+    load_structural_manifest,
+    rollout_parameters_from_structure,
+    run_structural_validation,
+    structural_mass_properties,
+)
 from ...models.rollout_sim import RolloutParameters
 from ..common import ScrollableControls, form_row, make_double, section_label
 
@@ -54,7 +57,7 @@ class _StructuralWorker(QObject):
     @pyqtSlot()
     def run(self) -> None:
         try:
-            result = run_structural_validation(
+            report, mesh, history, frame_results = run_structural_validation(
                 self.geometry_path,
                 self.manifest_path,
                 base_rollout_parameters=self.base_parameters,
@@ -63,7 +66,16 @@ class _StructuralWorker(QObject):
                 rerun_geometry_coupled_dynamics=self.rerun_dynamics,
                 run_mesh_convergence=self.run_convergence,
             )
-            self.completed.emit(result)
+            manifest = load_structural_manifest(self.manifest_path)
+            properties = structural_mass_properties(mesh, manifest.material)
+            coupled_parameters = rollout_parameters_from_structure(
+                self.base_parameters,
+                properties,
+                mass_scope=manifest.mass_scope,
+                module_points_m=manifest.load_map.module_points_m,
+                payload=manifest.payload,
+            )
+            self.completed.emit((report, mesh, history, frame_results, coupled_parameters))
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -71,7 +83,7 @@ class _StructuralWorker(QObject):
 class StructuralTwinTab(QWidget):
     """GUI for the validated geometry → volume mesh → dynamics → FEA workflow."""
 
-    validation_completed = pyqtSignal(object, object)
+    validation_completed = pyqtSignal(object, object, object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -81,6 +93,7 @@ class StructuralTwinTab(QWidget):
         self.report = None
         self.mesh = None
         self.history = None
+        self.coupled_parameters: RolloutParameters | None = None
         self.frame_results: dict[str, object] = {}
         self._thread: QThread | None = None
         self._worker: _StructuralWorker | None = None
@@ -219,8 +232,8 @@ class StructuralTwinTab(QWidget):
     @pyqtSlot(object)
     def _validation_ready(self, payload: object) -> None:
         try:
-            report, mesh, history, frame_results = payload
-            self.report = report; self.mesh = mesh; self.history = history; self.frame_results = dict(frame_results)
+            report, mesh, history, frame_results, coupled_parameters = payload
+            self.report = report; self.mesh = mesh; self.history = history; self.frame_results = dict(frame_results); self.coupled_parameters = coupled_parameters
             self.status_label.setText(
                 f"Structural validation complete — {mesh.node_count:,} nodes, {mesh.element_count:,} tetrahedra, {len(frame_results)} critical frames"
             )
@@ -229,7 +242,7 @@ class StructuralTwinTab(QWidget):
             self.checkpoint_combo.setEnabled(bool(self.frame_results)); self.export_report_btn.setEnabled(True); self.export_vtu_btn.setEnabled(bool(self.frame_results))
             if self.frame_results:
                 self.checkpoint_combo.setCurrentIndex(0); self._render_checkpoint()
-            self.validation_completed.emit(history, report)
+            self.validation_completed.emit(history, coupled_parameters, report)
         except Exception as exc:
             self._validation_failed(str(exc))
 
