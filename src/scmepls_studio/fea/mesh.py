@@ -14,8 +14,10 @@ class TetraMeshError(ValueError):
 class TetraMesh:
     """First-order tetrahedral mesh in SI units.
 
-    ``nodes_m`` stores global nodal coordinates in metres and ``tetrahedra``
-    stores zero-based 4-node element connectivity.
+    ``nodes_m`` stores nodal coordinates in the structural body frame and
+    ``tetrahedra`` stores zero-based 4-node connectivity. Connectivity orientation
+    is normalized on construction so a negative signed volume is not incorrectly
+    reported later as a physically inverted element.
     """
 
     nodes_m: np.ndarray
@@ -24,7 +26,7 @@ class TetraMesh:
 
     def __post_init__(self) -> None:
         nodes = np.asarray(self.nodes_m, dtype=float)
-        tets = np.asarray(self.tetrahedra, dtype=np.int64)
+        tets = np.asarray(self.tetrahedra, dtype=np.int64).copy()
         if nodes.ndim != 2 or nodes.shape[1] != 3 or len(nodes) < 4:
             raise TetraMeshError("nodes_m must have shape (N, 3) with at least four nodes.")
         if tets.ndim != 2 or tets.shape[1] != 4 or len(tets) < 1:
@@ -35,6 +37,24 @@ class TetraMesh:
             raise TetraMeshError("Tetrahedral connectivity contains out-of-range node indices.")
         if np.any(np.apply_along_axis(lambda row: len(set(row.tolist())) < 4, 1, tets)):
             raise TetraMeshError("At least one tetrahedron repeats a node index.")
+
+        # Normalize element orientation. A negative determinant can be caused solely
+        # by node ordering and is not, by itself, evidence of an inverted physical
+        # element. Swapping two local nodes makes the reference Jacobian positive.
+        p = nodes[tets]
+        signed = np.einsum(
+            "ij,ij->i",
+            np.cross(p[:, 1] - p[:, 0], p[:, 2] - p[:, 0]),
+            p[:, 3] - p[:, 0],
+        ) / 6.0
+        if np.any(~np.isfinite(signed)) or np.any(np.abs(signed) <= 1e-15):
+            raise TetraMeshError("Mesh contains zero-volume or invalid tetrahedra.")
+        negative = signed < 0.0
+        if np.any(negative):
+            tmp = tets[negative, 1].copy()
+            tets[negative, 1] = tets[negative, 2]
+            tets[negative, 2] = tmp
+
         object.__setattr__(self, "nodes_m", np.ascontiguousarray(nodes))
         object.__setattr__(self, "tetrahedra", np.ascontiguousarray(tets))
         volumes = self.element_volumes_m3
@@ -91,8 +111,7 @@ class TetraMesh:
             )
         )
         keys = np.sort(faces, axis=1)
-        unique, first, counts = np.unique(keys, axis=0, return_index=True, return_counts=True)
-        del unique
+        _, first, counts = np.unique(keys, axis=0, return_index=True, return_counts=True)
         return np.ascontiguousarray(faces[first[counts == 1]])
 
     @property
