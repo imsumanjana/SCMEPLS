@@ -17,7 +17,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ...models.rollout_sim import RolloutParameters, simulate_rollout
+from ...models.rollout_sim import (
+    MAX_GAP_M,
+    MIN_COMPLETE_RUN_TIME_S,
+    MIN_GAP_M,
+    RolloutParameters,
+    simulate_rollout,
+)
 from ...plotting.figures import rollout_dashboard_figure
 from ..common import ExportBar, FigureCanvasPanel, ScrollableControls, form_row, make_double, make_int, provenance_combo, save_panel_figure, section_label
 
@@ -35,12 +41,12 @@ class RolloutTab(QWidget):
         ); note.setWordWrap(True); self.controls.add_widget(note)
         self.controls.add_widget(form_row("Provenance", self.provenance))
         self.dt = make_double(0.01, 0.001, 0.1, 4, 0.005)
-        self.end_time = make_double(80.0, 20.0, 500.0, 2, 5.0)
+        self.end_time = make_double(80.0, MIN_COMPLETE_RUN_TIME_S, 500.0, 2, 5.0)
         self.track_length = make_double(1.50, 0.1, 100.0, 3, 0.1)
         self.platform_mass = make_double(25.0, 0.1, 1e6, 3, 1.0)
         self.payload_mass = make_double(50.0, 0.0, 1e6, 3, 1.0)
-        self.initial_gap = make_double(0.002, 0.0005, 0.05, 5, 0.001)
-        self.target_gap = make_double(0.010, 0.001, 0.1, 5, 0.001)
+        self.initial_gap = make_double(0.002, MIN_GAP_M, MAX_GAP_M, 5, 0.001)
+        self.target_gap = make_double(0.010, MIN_GAP_M, MAX_GAP_M, 5, 0.001)
         self.cgx = make_double(0.035, -1.0, 1.0, 4, 0.005)
         self.cgy = make_double(-0.025, -1.0, 1.0, 4, 0.005)
         self.wind_start = make_double(20.0, 0.0, 500.0, 2, 1.0)
