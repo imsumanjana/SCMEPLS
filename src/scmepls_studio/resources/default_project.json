@@ -1,0 +1,32 @@
+{
+  "project": "Hybrid maglev-mechanical rocket launchpad roll-out and locking system",
+  "analysis_status": "Engineering analysis; validation required",
+  "export_dpi": 600,
+  "vibration": {
+    "duration_s": 20.0,
+    "sample_rate_hz": 200.0,
+    "target_rms_mps2": {
+      "Crawler Transporter": 0.9,
+      "Rail Platform": 0.6,
+      "Maglev Platform": 0.1
+    }
+  },
+  "control_response": {
+    "maglev_equivalent_time_constant_s": 0.8,
+    "conventional_equivalent_time_constant_s": 2.8
+  },
+  "energy": {
+    "mass_tonnes": 1000.0,
+    "distance_m": 50.0,
+    "note": "Illustrative energy budgets only; replace with measured or simulated subsystem energy."
+  },
+  "rollout_simulation": {
+    "modules": 8,
+    "platform_mass_kg": 25.0,
+    "payload_mass_kg": 50.0,
+    "track_length_m": 1.5,
+    "target_gap_m": 0.01,
+    "seated_gap_m": 0.002,
+    "note": "Laboratory-scale reduced-order SC-MEPLS model."
+  }
+}
